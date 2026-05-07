@@ -11,10 +11,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2  # 更新小版本號以支援 Node 24
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v4.1.1 # 指定包含 Node 24 支援的版本
         with:
           python-version: '3.11'
 
