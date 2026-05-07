@@ -4,8 +4,6 @@ on:
     # 台灣時間 14:30 = UTC 06:30 (台股收盤後)
     - cron: '30 6 * * 1-5'
   workflow_dispatch:  # 允許手動觸發測試
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   run-signal:
     runs-on: ubuntu-latest
