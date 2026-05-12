@@ -173,8 +173,8 @@ def format_messages(signals: list[dict], watchlist: list[dict] = None) -> list[s
 
     msg1.append("📋 *策略規則*")
     msg1.append(
-        "基本面(EPS>5,ROE>15) + 技術面(均線/布林/KD/MACD) + 3年回測\n"
-        f"綜合 = 基本面30% + 技術30% + 回測40%\n"
+        "基本面(EPS>2,ROE>15) + 技術面(均線/布林/KD/MACD) + 3年回測\n"
+        f"綜合 = 基本面25% + 技術45% + 回測30%\n"
         f"BUY≥65(三關全過) | WATCH≥50\n"
         f"停損{CONFIG['stop_loss']*100:.0f}% / 停利{CONFIG['target_return']*100:.0f}% / 持有{CONFIG['hold_days']}日"
     )
