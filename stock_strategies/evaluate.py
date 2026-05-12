@@ -45,7 +45,7 @@ def evaluate(stock_id: str, name: str) -> Optional[dict]:
         bt_score = winrate * 100
 
         signal_score = round(
-            0.3 * fund_score + 0.3 * tech_score + 0.4 * bt_score, 1
+            0.25 * fund_score + 0.45 * tech_score + 0.3 * bt_score, 1
         )
 
         if (
