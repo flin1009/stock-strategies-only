@@ -73,7 +73,7 @@ def _explain_why(s: dict) -> str:
     c = s.get("components", {})
     reasons = []
     if not c.get("fundamental_pass"):
-        reasons.append("基本面未達標(EPS>5,ROE>15)")
+        reasons.append("基本面未達標(EPS>2,ROE>15)")
     if c.get("tech_score", 0) < 50:
         reasons.append(f"技術分僅{c.get('tech_score', 0)}(<50)")
     if s.get("signal_score", 0) < 65:
@@ -105,7 +105,6 @@ def _sector_summary(signals: list[dict], watchlist: list[dict]) -> list[str]:
         key=lambda x: np.mean(x[1]["chg_5d"]) if x[1]["chg_5d"] else 0,
         reverse=True,
     )
-
     lines = []
     for cat, d in ranked:
         avg = np.mean(d["chg_5d"]) if d["chg_5d"] else 0
