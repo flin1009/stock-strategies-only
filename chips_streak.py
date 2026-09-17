@@ -22,6 +22,14 @@ from stock_strategies.chips_scanner import scan_watchlist_chips
 from stock_strategies.notify import send_telegram, format_chips_streak
 
 
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+
 REQUIRED_ENV = [
     "FINMIND_TOKEN",
     "TELEGRAM_BOT_TOKEN",
@@ -51,13 +59,14 @@ def main():
 
     print("開始掃描三大法人連續買超標的...")
     matched = scan_watchlist_chips(watchlist, min_streak=3, delay_sec=0.15)
-    print(f"  → 掃描完成，共 {len(matched)} 檔符合連續買超 ≥ 3 天條件")
+    print(f"  → 掃描完成，共 {len(matched)} 檔符合連續買超 >= 3 天條件")
 
     for r in matched:
         print(
-            f"    • {r['stock_id']} {r['name']}: 連買 {r['main_streak']} 天 | "
+            f"    - {r['stock_id']} {r['name']}: 連買 {r['main_streak']} 天 | "
             f"累計買超 {r['streak_total_net_lots']:,} 張 | 累計漲幅 {r['streak_pct']:+.2f}%"
         )
+
 
     print("寫入 Google Sheet (Chips_Streak 分頁)...")
     try:

@@ -17,7 +17,14 @@ def send_telegram(text: str):
     }
     r = requests.post(url, json=payload, timeout=10)
     if not r.ok:
+        # 若 Markdown 解析失敗 (400)，改以純文字重發，確保訊息必定送達
+        if "can't parse entities" in r.text or r.status_code == 400:
+            payload.pop("parse_mode", None)
+            r2 = requests.post(url, json=payload, timeout=10)
+            if r2.ok:
+                return
         print(f"Telegram 送失敗: {r.text}", file=sys.stderr)
+
 
 
 def _trend_emoji(chg: float) -> str:
@@ -442,7 +449,7 @@ def format_chips_streak(records: list[dict]) -> str:
     lines.append("")
 
     for r in records[:15]:
-        tags_str = f" [{'/'.join(r['tags'])}]" if r.get("tags") else ""
+        tags_str = f" ({'/'.join(r['tags'])})" if r.get("tags") else ""
         lines.append(
             f"• *{r['stock_id']} {r['name']}*{tags_str} — 連買 *{r['main_streak']}* 天"
         )
@@ -463,6 +470,7 @@ def format_chips_streak(records: list[dict]) -> str:
             lines.append(f"  ↳ 近日漲幅: {recent_pcts}")
         lines.append("")
 
-    lines.append("💡 _統計數據已同步更新至 Google Sheet `Chips_Streak` 分頁_")
+    lines.append("💡 統計數據已同步更新至 Google Sheet Chips\\_Streak 分頁")
     return "\n".join(lines)
+
 
