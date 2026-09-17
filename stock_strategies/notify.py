@@ -53,7 +53,11 @@ def _format_stock_detail(s: dict, show_trend: bool = True) -> list[str]:
             f"距高點{t.get('pct_from_high', 0):.0f}% | {ma_status} | {vol_note}"
         )
     lines.append(
-        f"進場 {s['entry_price']} → 停損 {s['stop_loss_price']} / 目標 {s['target_price']}"
+        f"📌 *明日開盤進場* | 參考價 {s['entry_price']}"
+    )
+    lines.append(
+        f"停損 {s['stop_loss_price']} (-{CONFIG['stop_loss']*100:.0f}%) / "
+        f"目標 {s['target_price']} (+{CONFIG['target_return']*100:.0f}%)"
     )
     lines.append(
         f"風報比 1:{s['risk_reward_ratio']} | 建議部位 {s['position_size_pct']}%"
@@ -137,7 +141,12 @@ def _market_sentiment(signals: list[dict]) -> str:
         return "🔴 偏空 — 普遍下跌，建議空手等待"
 
 
-def format_messages(signals: list[dict], watchlist: list[dict] = None) -> list[str]:
+def format_messages(
+    signals: list[dict],
+    watchlist: list[dict] = None,
+    market: dict = None,
+    night_note: str = None,
+) -> list[str]:
     """產生多則 Telegram 訊息"""
     buys = [s for s in signals if s.get("action") == "BUY"]
     watches = [s for s in signals if s.get("action") == "WATCH"]
@@ -151,6 +160,16 @@ def format_messages(signals: list[dict], watchlist: list[dict] = None) -> list[s
     msg1.append(f"📊 *V3.0 每日選股報告* {today}")
     msg1.append(f"掃描 {total} 檔 | BUY {len(buys)} | WATCH {len(watches)} | SKIP {len(skips)}")
     msg1.append("")
+
+    if market and market.get("note"):
+        msg1.append("🎯 *大盤濾鏡*")
+        msg1.append(market["note"])
+        msg1.append("")
+
+    if night_note:
+        msg1.append("🌙 *夜盤濾鏡*")
+        msg1.append(night_note)
+        msg1.append("")
 
     msg1.append("🌡️ *市場氛圍*")
     msg1.append(_market_sentiment(signals))
@@ -238,7 +257,8 @@ def format_messages(signals: list[dict], watchlist: list[dict] = None) -> list[s
             )
             msg3.append(f"  {reason}")
             msg3.append(
-                f"  若進場: 進 {s['entry_price']} → 損 {s['stop_loss_price']} / 標 {s['target_price']}"
+                f"  明日開盤進場（參考 {s['entry_price']}）→ "
+                f"損 {s['stop_loss_price']} / 標 {s['target_price']}"
             )
             msg3.append("")
 
@@ -260,7 +280,145 @@ def format_messages(signals: list[dict], watchlist: list[dict] = None) -> list[s
     msg3.append("_以上為系統自動分析，僅供參考，投資決策請自行判斷_")
     messages.append("\n".join(msg3))
 
+    # === 第四則：量價深度解析 (V3.1) ===
+    msg4 = _format_deep_analysis(signals, today)
+    messages.append(msg4)
+
     return messages
+
+
+def _format_deep_analysis(signals: list[dict], today: str) -> str:
+    """量價陣列深度解析（V3.1）"""
+    lines = [f"🔬 *量價深度解析* {today}", ""]
+
+    buys = [s for s in signals if s.get("action") == "BUY"]
+    watches = [s for s in signals if s.get("action") == "WATCH"]
+
+    has_patterns = lambda s: bool(s.get("components", {}).get("volume_patterns"))
+    has_danger = lambda s: "放量滯漲" in s.get("components", {}).get("volume_patterns", [])
+
+    danger_stocks = [s for s in signals if has_danger(s)]
+
+    if buys:
+        lines.append("🟢 *BUY 深度解析*")
+        lines.append("")
+        for s in buys:
+            lines.extend(_format_volume_block(s))
+            lines.append("")
+
+    interesting_watches = [s for s in watches if has_patterns(s)]
+    if interesting_watches:
+        lines.append(f"🟡 *WATCH 量價解讀 ({len(interesting_watches)})*")
+        lines.append("")
+        for s in interesting_watches[:8]:
+            lines.extend(_format_volume_block(s))
+            lines.append("")
+
+    if danger_stocks:
+        lines.append("⚠️ *風險警示 — 放量滯漲*")
+        lines.append("")
+        for s in danger_stocks:
+            if s.get("action") in ("BUY", "WATCH") and has_patterns(s):
+                continue
+            lines.append(
+                f"• *{s['stock_id']} {s['name']}* ({s.get('action', '—')})"
+            )
+            c = s.get("components", {})
+            details = c.get("volume_details", {})
+            if "放量滯漲" in details:
+                lines.append(f"  ↳ {details['放量滯漲']}")
+            lines.append(f"  {c.get('volume_verdict', '')}")
+            lines.append("")
+
+    if not buys and not interesting_watches and not danger_stocks:
+        lines.append("_今日無顯著量價訊號_")
+        lines.append("")
+
+    lines.append("📖 *V3.1 量價字典速查*")
+    lines.append("• 倍量柱 = 今日量 ≥ 昨日 2x（主力點火）")
+    lines.append("• 梯量柱 = 連續 3 日量能遞增（健康上攻）")
+    lines.append("• 縮量柱 = 下跌時量能遞減（洗盤，主力未退）")
+    lines.append("• 低量柱 = 極限窒息量（拋壓耗盡）")
+    lines.append("• 放量滯漲 = 高檔爆量但 K 收黑（主力倒貨）")
+
+    return "\n".join(lines)
+
+
+def _format_volume_block(s: dict) -> list[str]:
+    """格式化單檔股票的量價區塊"""
+    c = s.get("components", {})
+    patterns = c.get("volume_patterns", [])
+    details = c.get("volume_details", {})
+    verdict = c.get("volume_verdict", "")
+
+    lines = [f"• *{s['stock_id']} {s['name']}* ({s.get('action')}, {s['signal_score']}分)"]
+
+    if patterns:
+        lines.append(f"  量能陣列: {' + '.join(patterns)}")
+        for p in patterns:
+            if p in details:
+                lines.append(f"  ↳ {details[p]}")
+    else:
+        lines.append("  量能陣列: 無特殊型態")
+
+    if verdict:
+        lines.append(f"  結論: {verdict}")
+    return lines
+
+
+def format_premarket(night: dict | None, signals: list[dict]) -> str:
+    """夜盤盤前快報：夜盤方向預判 + 疊加昨日 BUY/WATCH 訊號。
+
+    night   — night_session.get_night_session() 的回傳（可能為 None）
+    signals — sheet.read_latest_signals() 的回傳（Sheet 扁平 dict，最新在最前）
+    """
+    from .night_session import tailwind_tag, bias_guidance
+
+    today = datetime.now()
+    wd = "一二三四五六日"[today.weekday()]
+    lines = [f"🌙 *夜盤盤前快報* {today.strftime('%Y/%m/%d')} (週{wd})", ""]
+
+    # === 夜盤方向預判 ===
+    if night:
+        lines.append(
+            f"{night['emoji']} *台指期夜盤 {night['pct']:+.2f}% "
+            f"({night['spread']:+.0f} 點)*"
+        )
+        lines.append(f"近月收 {night['close']:.0f} | 量 {night['volume']:,}")
+        if night["date"] != today.strftime("%Y-%m-%d"):
+            lines.append(f"_（資料時間：{night['date']} 夜盤）_")
+        lines.append(f"📈 開盤方向預判：*{night['label']}* → {night['direction']}")
+    else:
+        lines.append("⚠️ 夜盤資料暫時取不到，今日盤前以個股訊號為主")
+    lines.append("")
+
+    # === 疊加昨日訊號 ===
+    bias = night["bias"] if night else "flat"
+    tag = tailwind_tag(bias)
+    actionable = [
+        s for s in signals
+        if str(s.get("action", "")).upper() in ("BUY", "WATCH")
+    ]
+    if actionable:
+        latest_day = actionable[0].get("date", "")  # 最新在最前
+        batch = [s for s in actionable if s.get("date", "") == latest_day]
+        buys = [s for s in batch if str(s["action"]).upper() == "BUY"]
+        watches = [s for s in batch if str(s["action"]).upper() == "WATCH"]
+        lines.append(f"📋 *昨日訊號 × 夜盤對照* ({latest_day})")
+        for s in (buys + watches)[:12]:
+            act = str(s["action"]).upper()
+            dot = "🟢" if act == "BUY" else "🟡"
+            lines.append(
+                f"{dot} {act} {s.get('stock_id', '')} {s.get('name', '')} "
+                f"{s.get('signal_score', '')}分 · {tag}"
+            )
+        lines.append(f"↳ _{bias_guidance(bias)}_")
+    else:
+        lines.append("📋 昨日無 BUY/WATCH 訊號（或尚未跑過選股）")
+    lines.append("")
+
+    lines.append("💡 _夜盤僅領先參考，開盤後仍以實際量價為準_")
+    return "\n".join(lines)
 
 
 def format_message(signals: list[dict]) -> str:

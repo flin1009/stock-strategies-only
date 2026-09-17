@@ -1,7 +1,7 @@
 [project]
 name = "stock-strategies-only"
-version = "0.1.0"
-description = "V3.0 每日選股訊號系統"
+version = "0.2.0"
+description = "V3.2 每日選股訊號系統 + 策略庫 / AI 生策略 web UI"
 requires-python = ">=3.11"
 dependencies = [
     "google-auth>=2.49.2",
@@ -10,7 +10,23 @@ dependencies = [
     "pandas>=3.0.2",
     "python-dotenv>=1.2.2",
     "requests>=2.33.1",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "google-generativeai>=0.8.0",
+    "pyarrow>=24.0.0",
 ]
 
-[tool.uv.workspace]
-members = []
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-mock>=3.15.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: 對真實 FinMind API 的整合測試（預設不跑，用 -m live 觸發）",
+]
+addopts = "-m 'not live'"
+

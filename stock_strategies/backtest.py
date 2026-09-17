@@ -5,11 +5,28 @@ from .config import CONFIG
 from .indicators import tech_score_at
 
 
-def backtest(df: pd.DataFrame) -> dict:
-    """對過去 3 年所有技術分 ≥60 的日子做持有 20 日結算"""
+def backtest(df: pd.DataFrame, params: dict | None = None) -> dict:
+    """對歷史所有技術分達門檻的日子做持有 N 日結算。
+
+    訊號日為第 i 天收盤產生，實際進場為第 i+1 天開盤（符合可執行性）。
+
+    params (扁平 dict) 可覆寫：
+      - hold_days
+      - min_tech_score_for_signal
+      - target_return / stop_loss
+      - use_ma_alignment / use_bollinger_bounce / use_kd_golden_cross / use_macd_bullish
+    沒給就退回到舊 CONFIG。
+    """
+    if params is None:
+        params = {}
+    hold_days = int(params.get("hold_days", CONFIG["hold_days"]))
+    min_score = int(params.get("min_tech_score_for_signal", CONFIG["min_tech_score_for_signal"]))
+    target = float(params.get("target_return", CONFIG["target_return"]))
+    stop = float(params.get("stop_loss", CONFIG["stop_loss"]))
+
     indices = []
-    for i in range(60, len(df) - CONFIG["hold_days"]):
-        if tech_score_at(df.iloc[i])["score"] >= CONFIG["min_tech_score_for_signal"]:
+    for i in range(60, len(df) - hold_days - 1):
+        if tech_score_at(df.iloc[i], params)["score"] >= min_score:
             indices.append(i)
 
     if not indices:
@@ -18,23 +35,27 @@ def backtest(df: pd.DataFrame) -> dict:
     wins = losses = 0
     returns = []
     for idx in indices:
-        entry = df.iloc[idx]["close"]
-        future = df.iloc[idx + 1 : idx + 1 + CONFIG["hold_days"]]
-        if len(future) < CONFIG["hold_days"]:
+        next_day = df.iloc[idx + 1]
+        entry = next_day.get("open")
+        if entry is None or pd.isna(entry) or entry <= 0:
+            continue
+
+        future = df.iloc[idx + 2 : idx + 2 + hold_days]
+        if len(future) < hold_days:
             continue
 
         hi, lo = future["high"].max(), future["low"].min()
         fc = future.iloc[-1]["close"]
 
-        hit_target = hi >= entry * (1 + CONFIG["target_return"])
-        hit_stop = lo <= entry * (1 - CONFIG["stop_loss"])
+        hit_target = hi >= entry * (1 + target)
+        hit_stop = lo <= entry * (1 - stop)
 
         if hit_target and not hit_stop:
             wins += 1
-            returns.append(CONFIG["target_return"])
+            returns.append(target)
         elif hit_stop:
             losses += 1
-            returns.append(-CONFIG["stop_loss"])
+            returns.append(-stop)
         else:
             r = (fc - entry) / entry
             returns.append(r)

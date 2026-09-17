@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    @apply bg-bg text-text;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Noto Sans TC", "PingFang TC", sans-serif;
+  }
+  ::selection { background: #2563eb55; }
+}
+
+@layer components {
+  .card {
+    @apply bg-panel border border-line rounded-xl p-5;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-blue-500;
+  }
+  .btn-ghost {
+    @apply btn border border-line text-text hover:bg-panel2;
+  }
+  .btn-danger {
+    @apply btn border border-red-500/40 text-red-400 hover:bg-red-500/10;
+  }
+  .input {
+    @apply w-full bg-panel2 border border-line rounded-lg px-3 py-2 text-sm
+           focus:outline-none focus:border-accent;
+  }
+  .label {
+    @apply block text-xs uppercase tracking-wider text-muted mb-1;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+  .badge-buy { @apply badge bg-buy/15 text-buy border border-buy/30; }
+  .badge-watch { @apply badge bg-watch/15 text-watch border border-watch/30; }
+  .badge-skip { @apply badge bg-skip/15 text-skip border border-skip/30; }
+  .badge-err { @apply badge bg-err/15 text-err border border-err/30; }
+  .badge-ai { @apply badge bg-purple-500/15 text-purple-300 border border-purple-500/30; }
+  .badge-manual { @apply badge bg-blue-500/15 text-blue-300 border border-blue-500/30; }
+  .badge-default { @apply badge bg-slate-500/15 text-slate-300 border border-slate-500/30; }
+}

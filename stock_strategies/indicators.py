@@ -36,38 +36,52 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def tech_score_at(row: pd.Series) -> dict:
-    """對一天計算技術分 (0-100)"""
-    score = 0
-    signals = []
+def tech_score_at(row: pd.Series, params: dict | None = None) -> dict:
+    """對一天計算技術分 (0-100)。
+    params 可包含 use_ma_alignment / use_bollinger_bounce / use_kd_golden_cross /
+    use_macd_bullish 四個布林開關來開關各訊號。
+    """
+    if params is None:
+        params = {}
+    use_ma = params.get("use_ma_alignment", True)
+    use_bb = params.get("use_bollinger_bounce", True)
+    use_kd = params.get("use_kd_golden_cross", True)
+    use_macd = params.get("use_macd_bullish", True)
 
-    if pd.notna(row["ma20"]) and pd.notna(row["ma60"]):
+    # 開啟的訊號數量決定每個訊號最大分數，讓總分維持 0-100
+    enabled = sum([use_ma, use_bb, use_kd, use_macd]) or 1
+    max_per = 100 / enabled
+
+    score = 0.0
+    signals: list[str] = []
+
+    if use_ma and pd.notna(row["ma20"]) and pd.notna(row["ma60"]):
         if row["close"] > row["ma20"] > row["ma60"]:
-            score += 25
+            score += max_per
             signals.append("均線多頭")
         elif row["close"] > row["ma20"]:
-            score += 12
+            score += max_per * 0.48
 
-    if pd.notna(row["bb_lower"]) and pd.notna(row["bb_mid"]):
+    if use_bb and pd.notna(row["bb_lower"]) and pd.notna(row["bb_mid"]):
         dist = (row["close"] - row["bb_lower"]) / row["bb_lower"]
         if 0 < dist < 0.03:
-            score += 25
+            score += max_per
             signals.append("布林下軌反彈")
         elif row["close"] < row["bb_mid"]:
-            score += 10
+            score += max_per * 0.4
 
-    if pd.notna(row["k"]) and pd.notna(row["d"]):
+    if use_kd and pd.notna(row["k"]) and pd.notna(row["d"]):
         if row["k"] > row["d"] and row["k"] < 80:
-            score += 25
+            score += max_per
             signals.append("KD黃金交叉")
         elif row["k"] > row["d"]:
-            score += 10
+            score += max_per * 0.4
 
-    if pd.notna(row["macd_hist"]):
+    if use_macd and pd.notna(row["macd_hist"]):
         if row["macd_hist"] > 0 and row["dif"] > row["dea"]:
-            score += 25
+            score += max_per
             signals.append("MACD多頭")
         elif row["macd_hist"] > 0:
-            score += 10
+            score += max_per * 0.4
 
-    return {"score": score, "signals": signals}
+    return {"score": int(round(score)), "signals": signals}
