@@ -193,3 +193,57 @@ def write_performance(records: list[dict]):
 
     rows = [[r.get(h, "") for h in PERFORMANCE_HEADERS] for r in records]
     ws.append_rows(rows)
+
+
+CHIPS_STREAK_HEADERS = [
+    "date",
+    "stock_id",
+    "name",
+    "total_streak",
+    "foreign_streak",
+    "trust_streak",
+    "streak_total_net_lots",
+    "today_total_net_lots",
+    "today_close",
+    "today_pct",
+    "streak_pct",
+    "recent_daily_pcts",
+    "tags",
+]
+
+
+def write_chips_streak(records: list[dict]):
+    """整張 Chips_Streak 分頁清空重寫。"""
+    sh = get_gsheet()
+    try:
+        ws = sh.worksheet("Chips_Streak")
+        ws.clear()
+    except gspread.WorksheetNotFound:
+        rows_alloc = max(500, len(records) + 50)
+        ws = sh.add_worksheet(
+            title="Chips_Streak", rows=rows_alloc, cols=len(CHIPS_STREAK_HEADERS)
+        )
+
+    ws.append_row(CHIPS_STREAK_HEADERS)
+    if not records:
+        return
+
+    rows = []
+    for r in records:
+        rows.append([
+            r.get("date", ""),
+            r.get("stock_id", ""),
+            r.get("name", ""),
+            r.get("total_streak", 0),
+            r.get("foreign_streak", 0),
+            r.get("trust_streak", 0),
+            r.get("streak_total_net_lots", 0),
+            r.get("today_total_net_lots", 0),
+            r.get("today_close", 0.0),
+            f"{r.get('today_pct', 0.0):+.2f}%",
+            f"{r.get('streak_pct', 0.0):+.2f}%",
+            " / ".join(r.get("recent_daily_pcts", [])),
+            ", ".join(r.get("tags", [])),
+        ])
+    ws.append_rows(rows)
+

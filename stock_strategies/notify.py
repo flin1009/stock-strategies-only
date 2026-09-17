@@ -424,3 +424,45 @@ def format_premarket(night: dict | None, signals: list[dict]) -> str:
 def format_message(signals: list[dict]) -> str:
     """向後相容"""
     return format_messages(signals)[0]
+
+
+def format_chips_streak(records: list[dict]) -> str:
+    """三大法人連續買超早報推播格式"""
+    today = datetime.now()
+    wd = "一二三四五六日"[today.weekday()]
+    lines = [f"🔥 *三大法人連買強勢股早報* {today.strftime('%Y/%m/%d')} (週{wd})", ""]
+
+    if not records:
+        lines.append("📋 觀察清單中今日無符合「連續買超 ≥ 3 天」的標的。")
+        lines.append("")
+        lines.append("💡 _法人動態僅供參考，投資請謹慎評估風險_")
+        return "\n".join(lines)
+
+    lines.append(f"共篩選出 {len(records)} 檔法人持續買進標的：")
+    lines.append("")
+
+    for r in records[:15]:
+        tags_str = f" [{'/'.join(r['tags'])}]" if r.get("tags") else ""
+        lines.append(
+            f"• *{r['stock_id']} {r['name']}*{tags_str} — 連買 *{r['main_streak']}* 天"
+        )
+        sub_info = []
+        if r.get("foreign_streak", 0) > 0:
+            sub_info.append(f"外資連{r['foreign_streak']}")
+        if r.get("trust_streak", 0) > 0:
+            sub_info.append(f"投信連{r['trust_streak']}")
+        if r.get("total_streak", 0) > 0:
+            sub_info.append(f"合計連{r['total_streak']}")
+        lines.append(f"  法人買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張")
+
+        recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
+        lines.append(
+            f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
+        )
+        if recent_pcts:
+            lines.append(f"  ↳ 近日漲幅: {recent_pcts}")
+        lines.append("")
+
+    lines.append("💡 _統計數據已同步更新至 Google Sheet `Chips_Streak` 分頁_")
+    return "\n".join(lines)
+
