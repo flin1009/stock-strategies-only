@@ -199,6 +199,7 @@ CHIPS_STREAK_HEADERS = [
     "date",
     "stock_id",
     "name",
+    "is_watchlist",
     "total_streak",
     "foreign_streak",
     "trust_streak",
@@ -234,6 +235,7 @@ def write_chips_streak(records: list[dict]):
             r.get("date", ""),
             r.get("stock_id", ""),
             r.get("name", ""),
+            "⭐ 是" if r.get("is_watchlist") else "否",
             r.get("total_streak", 0),
             r.get("foreign_streak", 0),
             r.get("trust_streak", 0),
@@ -246,4 +248,5 @@ def write_chips_streak(records: list[dict]):
             ", ".join(r.get("tags", [])),
         ])
     ws.append_rows(rows)
+
 
