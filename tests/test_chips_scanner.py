@@ -8,7 +8,11 @@ from stock_strategies.chips_scanner import (
 )
 from stock_strategies.exchange_data import _parse_int
 from stock_strategies.notify import format_chips_streak
-from stock_strategies.sheet import write_chips_streak, CHIPS_STREAK_HEADERS
+from stock_strategies.sheet import (
+    write_chips_streak,
+    write_chips_sell_streak,
+    CHIPS_STREAK_HEADERS,
+)
 
 
 def test_parse_int():
@@ -63,7 +67,7 @@ def test_enrich_candidate_price(monkeypatch):
 def test_scan_market_chips_streak(monkeypatch):
     fake_market_res = {
         "trading_days": ["2026-09-12", "2026-09-15", "2026-09-16"],
-        "candidates": [
+        "buy_candidates": [
             {
                 "stock_id": "2330",
                 "name": "台積電",
@@ -87,6 +91,19 @@ def test_scan_market_chips_streak(monkeypatch):
                 "tags": ["外資買進"],
             },
         ],
+        "sell_candidates": [
+            {
+                "stock_id": "2454",
+                "name": "聯發科",
+                "total_streak": 3,
+                "foreign_streak": 3,
+                "trust_streak": 3,
+                "main_streak": 3,
+                "streak_total_net_lots": -5000,
+                "today_total_net_lots": -1500,
+                "tags": ["土洋同賣"],
+            },
+        ],
     }
 
     monkeypatch.setattr(
@@ -101,53 +118,103 @@ def test_scan_market_chips_streak(monkeypatch):
     watchlist = [{"stock_id": "2330", "name": "台積電"}]
     res = scan_market_chips_streak(watchlist=watchlist, min_streak=3, delay_sec=0)
 
+    # 驗證 buy_records
+    assert len(res["buy_records"]) == 2
+    assert res["buy_records"][0]["stock_id"] == "2330"
+    assert res["buy_records"][0]["is_watchlist"] is True
+    assert res["buy_records"][1]["stock_id"] == "3231"
+    assert res["buy_records"][1]["is_watchlist"] is False
+
+    # 驗證 sell_records
+    assert len(res["sell_records"]) == 1
+    assert res["sell_records"][0]["stock_id"] == "2454"
+    assert res["sell_records"][0]["is_watchlist"] is False
+
+    # 向後相容 list 迭代行為
     assert len(res) == 2
-    # 自選股應優先置頂
     assert res[0]["stock_id"] == "2330"
-    assert res[0]["is_watchlist"] is True
-    assert res[1]["stock_id"] == "3231"
-    assert res[1]["is_watchlist"] is False
 
 
 def test_format_chips_streak_content():
-    records = [
-        {
-            "stock_id": "2330",
-            "name": "台積電",
-            "is_watchlist": True,
-            "main_streak": 5,
-            "foreign_streak": 5,
-            "trust_streak": 3,
-            "total_streak": 5,
-            "streak_total_net_lots": 25000,
-            "today_close": 1020.0,
-            "today_pct": 2.1,
-            "streak_pct": 6.8,
-            "recent_daily_pcts": ["+1.2%", "+0.5%", "+2.1%"],
-            "tags": ["土洋同買"],
-        },
-        {
-            "stock_id": "3231",
-            "name": "緯創",
-            "is_watchlist": False,
-            "main_streak": 4,
-            "foreign_streak": 4,
-            "trust_streak": 0,
-            "total_streak": 4,
-            "streak_total_net_lots": 18000,
-            "today_close": 120.0,
-            "today_pct": 3.5,
-            "streak_pct": 8.5,
-            "recent_daily_pcts": ["+3.5%"],
-            "tags": ["外資買進"],
-        },
-    ]
-    msg = format_chips_streak(records)
+    scan_result = {
+        "buy_records": [
+            {
+                "stock_id": "2330",
+                "name": "台積電",
+                "is_watchlist": True,
+                "main_streak": 5,
+                "foreign_streak": 5,
+                "trust_streak": 3,
+                "total_streak": 5,
+                "streak_total_net_lots": 25000,
+                "today_close": 1020.0,
+                "today_pct": 2.1,
+                "streak_pct": 6.8,
+                "recent_daily_pcts": ["+1.2%", "+0.5%", "+2.1%"],
+                "tags": ["土洋同買"],
+            },
+            {
+                "stock_id": "3231",
+                "name": "緯創",
+                "is_watchlist": False,
+                "main_streak": 4,
+                "foreign_streak": 4,
+                "trust_streak": 0,
+                "total_streak": 4,
+                "streak_total_net_lots": 18000,
+                "today_close": 120.0,
+                "today_pct": 3.5,
+                "streak_pct": 8.5,
+                "recent_daily_pcts": ["+3.5%"],
+                "tags": ["外資買進"],
+            },
+        ],
+        "sell_records": [
+            {
+                "stock_id": "2454",
+                "name": "聯發科",
+                "is_watchlist": True,
+                "main_streak": 3,
+                "foreign_streak": 3,
+                "trust_streak": 0,
+                "total_streak": 3,
+                "streak_total_net_lots": -6000,
+                "today_close": 1400.0,
+                "today_pct": -1.8,
+                "streak_pct": -4.2,
+                "recent_daily_pcts": ["-1.0%", "-1.4%", "-1.8%"],
+                "tags": ["外資提款"],
+            },
+            {
+                "stock_id": "2603",
+                "name": "長榮",
+                "is_watchlist": False,
+                "main_streak": 4,
+                "foreign_streak": 4,
+                "trust_streak": 4,
+                "total_streak": 4,
+                "streak_total_net_lots": -12000,
+                "today_close": 180.0,
+                "today_pct": -2.5,
+                "streak_pct": -6.0,
+                "recent_daily_pcts": ["-2.5%"],
+                "tags": ["土洋同賣"],
+            },
+        ],
+    }
+    msg = format_chips_streak(scan_result)
     assert "自選股連買追蹤" in msg
-    assert "全市場法人連買精選" in msg
+    assert "全市場連買精選" in msg
     assert "台積電" in msg
     assert "緯創" in msg
     assert "土洋同買" in msg
+
+    assert "【空方 — 法人連賣避險警示】" in msg
+    assert "自選股連賣警戒" in msg
+    assert "全市場連賣提款榜" in msg
+    assert "聯發科" in msg
+    assert "長榮" in msg
+    assert "外資提款" in msg
 
 
 def test_write_chips_streak(monkeypatch):
@@ -197,4 +264,53 @@ def test_write_chips_streak(monkeypatch):
     assert fake_ws.header_row == CHIPS_STREAK_HEADERS
     assert len(fake_ws.rows) == 1
     assert fake_ws.rows[0][1] == "2330"
+    assert fake_ws.rows[0][3] == "⭐ 是"
+
+
+def test_write_chips_sell_streak(monkeypatch):
+    class FakeWorksheet:
+        def __init__(self):
+            self.cleared = False
+            self.header_row = None
+            self.rows = []
+
+        def clear(self):
+            self.cleared = True
+
+        def append_row(self, row):
+            self.header_row = row
+
+        def append_rows(self, rows):
+            self.rows.extend(rows)
+
+    fake_ws = FakeWorksheet()
+
+    class FakeSheet:
+        def worksheet(self, title):
+            return fake_ws
+
+    monkeypatch.setattr("stock_strategies.sheet.get_gsheet", lambda: FakeSheet())
+
+    records = [{
+        "date": "2026-09-17",
+        "stock_id": "2454",
+        "name": "聯發科",
+        "is_watchlist": True,
+        "total_streak": 3,
+        "foreign_streak": 3,
+        "trust_streak": 0,
+        "streak_total_net_lots": -5000,
+        "today_total_net_lots": -1500,
+        "today_close": 1400.0,
+        "today_pct": -1.5,
+        "streak_pct": -4.5,
+        "recent_daily_pcts": ["-1.0%", "-2.0%", "-1.5%"],
+        "tags": ["外資提款"],
+    }]
+
+    write_chips_sell_streak(records)
+    assert fake_ws.cleared is True
+    assert fake_ws.header_row == CHIPS_STREAK_HEADERS
+    assert len(fake_ws.rows) == 1
+    assert fake_ws.rows[0][1] == "2454"
     assert fake_ws.rows[0][3] == "⭐ 是"

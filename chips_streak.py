@@ -18,7 +18,7 @@ try:
 except ImportError:
     pass
 
-from stock_strategies.sheet import read_watchlist, write_chips_streak
+from stock_strategies.sheet import read_watchlist, write_chips_streak, write_chips_sell_streak
 from stock_strategies.chips_scanner import scan_market_chips_streak
 from stock_strategies.notify import send_telegram, format_chips_streak
 
@@ -55,34 +55,50 @@ def main():
 
     print(f"  → 自選名單共 {len(watchlist)} 檔啟用中")
 
-    print("啟動證交所/櫃買中心全市場 (2,200+ 檔) 三大法人連買掃描...")
+    print("啟動證交所/櫃買中心全市場 (2,200+ 檔) 三大法人連買與連賣掃描...")
     matched = scan_market_chips_streak(
         watchlist=watchlist,
         min_streak=3,
         max_market_candidates=60,
         delay_sec=0.03,
     )
-    wl_matched = [r for r in matched if r.get("is_watchlist")]
-    mkt_matched = [r for r in matched if not r.get("is_watchlist")]
+    buy_records = matched.get("buy_records", [])
+    sell_records = matched.get("sell_records", [])
 
-    print(f"  → 掃描完成！共納入 {len(matched)} 檔標的")
-    print(f"    • 自選股達標: {len(wl_matched)} 檔")
-    for r in wl_matched:
+    wl_buys = [r for r in buy_records if r.get("is_watchlist")]
+    mkt_buys = [r for r in buy_records if not r.get("is_watchlist")]
+    wl_sells = [r for r in sell_records if r.get("is_watchlist")]
+    mkt_sells = [r for r in sell_records if not r.get("is_watchlist")]
+
+    print(f"  → 掃描完成！多方連買共 {len(buy_records)} 檔，空方連賣共 {len(sell_records)} 檔")
+    print(f"    • 多方自選股達標: {len(wl_buys)} 檔 | 全市場精選: {len(mkt_buys)} 檔")
+    for r in wl_buys:
         print(
-            f"      ⭐ {r['stock_id']} {r['name']}: 連買 {r['main_streak']} 天 | "
+            f"      🟢 ⭐ {r['stock_id']} {r['name']}: 連買 {r['main_streak']} 天 | "
+            f"累計買超 {r['streak_total_net_lots']:,} 張 | 累計漲幅 {r['streak_pct']:+.2f}%"
+        )
+    for r in mkt_buys[:5]:
+        print(
+            f"      🟢 - {r['stock_id']} {r['name']}: 連買 {r['main_streak']} 天 | "
             f"累計買超 {r['streak_total_net_lots']:,} 張 | 累計漲幅 {r['streak_pct']:+.2f}%"
         )
 
-    print(f"    • 全市場精選: {len(mkt_matched)} 檔 (顯示前 5 檔範例)")
-    for r in mkt_matched[:5]:
+    print(f"    • 空方自選股警戒: {len(wl_sells)} 檔 | 全市場提款: {len(mkt_sells)} 檔")
+    for r in wl_sells:
         print(
-            f"      - {r['stock_id']} {r['name']}: 連買 {r['main_streak']} 天 | "
-            f"累計買超 {r['streak_total_net_lots']:,} 張 | 累計漲幅 {r['streak_pct']:+.2f}%"
+            f"      🔴 ⭐ {r['stock_id']} {r['name']}: 連賣 {r['main_streak']} 天 | "
+            f"累計賣超 {r['streak_total_net_lots']:,} 張 | 累計跌幅 {r['streak_pct']:+.2f}%"
+        )
+    for r in mkt_sells[:5]:
+        print(
+            f"      🔴 - {r['stock_id']} {r['name']}: 連賣 {r['main_streak']} 天 | "
+            f"累計賣超 {r['streak_total_net_lots']:,} 張 | 累計跌幅 {r['streak_pct']:+.2f}%"
         )
 
-    print("寫入 Google Sheet (Chips_Streak 分頁)...")
+    print("寫入 Google Sheet (Chips_Streak & Chips_Sell_Streak 分頁)...")
     try:
-        write_chips_streak(matched)
+        write_chips_streak(buy_records)
+        write_chips_sell_streak(sell_records)
         print("  → 寫入 Google Sheet 完成")
     except Exception as e:
         print(f"⚠️ 寫入 Google Sheet 失敗: {e}", file=sys.stderr)

@@ -202,7 +202,8 @@ def get_market_streak_candidates(
     latest_day = days[-1]
     latest_df = daily_dfs[latest_day]
 
-    candidates = []
+    buy_candidates = []
+    sell_candidates = []
     for sid, row in latest_df.iterrows():
         sid = str(sid).strip()
         # 排除 6 碼以上特殊權證，保留普通股票 (4~5碼) 或 ETF (00開頭)
@@ -231,8 +232,8 @@ def get_market_streak_candidates(
                 "dealer_net": d_net,
             })
 
-        # 由最新一天往回數連續買超天數
-        def _count_streak(key: str) -> int:
+        # 1. 連續買超天數 (值 > 0)
+        def _count_streak_buy(key: str) -> int:
             k = 0
             for h in reversed(history):
                 if h[key] > 0:
@@ -241,36 +242,86 @@ def get_market_streak_candidates(
                     break
             return k
 
-        tot_streak = _count_streak("total_net")
-        f_streak = _count_streak("foreign_net")
-        t_streak = _count_streak("trust_net")
-        main_streak = max(tot_streak, f_streak, t_streak)
+        # 2. 連續賣超天數 (值 < 0)
+        def _count_streak_sell(key: str) -> int:
+            k = 0
+            for h in reversed(history):
+                if h[key] < 0:
+                    k += 1
+                else:
+                    break
+            return k
 
-        if main_streak >= min_streak:
+        tot_buy_streak = _count_streak_buy("total_net")
+        f_buy_streak = _count_streak_buy("foreign_net")
+        t_buy_streak = _count_streak_buy("trust_net")
+        main_buy_streak = max(tot_buy_streak, f_buy_streak, t_buy_streak)
+
+        if main_buy_streak >= min_streak:
             tags = []
-            if f_streak >= min_streak and t_streak >= min_streak:
+            if f_buy_streak >= min_streak and t_buy_streak >= min_streak:
                 tags.append("土洋同買")
-            elif t_streak >= min_streak:
+            elif t_buy_streak >= min_streak:
                 tags.append("投信認養")
-            elif f_streak >= min_streak:
+            elif f_buy_streak >= min_streak:
                 tags.append("外資買進")
-            elif tot_streak >= min_streak:
+            elif tot_buy_streak >= min_streak:
                 tags.append("法人合買")
 
-            streak_records = history[-main_streak:]
+            streak_records = history[-main_buy_streak:]
             streak_total_net = sum(h["total_net"] for h in streak_records)
             streak_foreign_net = sum(h["foreign_net"] for h in streak_records)
             streak_trust_net = sum(h["trust_net"] for h in streak_records)
             today_tot = history[-1]["total_net"]
 
-            candidates.append({
+            buy_candidates.append({
                 "stock_id": sid,
                 "name": name,
                 "market": market,
-                "total_streak": tot_streak,
-                "foreign_streak": f_streak,
-                "trust_streak": t_streak,
-                "main_streak": main_streak,
+                "direction": "buy",
+                "total_streak": tot_buy_streak,
+                "foreign_streak": f_buy_streak,
+                "trust_streak": t_buy_streak,
+                "main_streak": main_buy_streak,
+                "today_total_net_lots": int(today_tot // 1000),
+                "streak_total_net_lots": int(streak_total_net // 1000),
+                "streak_foreign_net_lots": int(streak_foreign_net // 1000),
+                "streak_trust_net_lots": int(streak_trust_net // 1000),
+                "tags": tags,
+                "history": history,
+            })
+
+        tot_sell_streak = _count_streak_sell("total_net")
+        f_sell_streak = _count_streak_sell("foreign_net")
+        t_sell_streak = _count_streak_sell("trust_net")
+        main_sell_streak = max(tot_sell_streak, f_sell_streak, t_sell_streak)
+
+        if main_sell_streak >= min_streak:
+            tags = []
+            if f_sell_streak >= min_streak and t_sell_streak >= min_streak:
+                tags.append("土洋同賣")
+            elif t_sell_streak >= min_streak:
+                tags.append("投信結帳")
+            elif f_sell_streak >= min_streak:
+                tags.append("外資提款")
+            elif tot_sell_streak >= min_streak:
+                tags.append("法人合賣")
+
+            streak_records = history[-main_sell_streak:]
+            streak_total_net = sum(h["total_net"] for h in streak_records)
+            streak_foreign_net = sum(h["foreign_net"] for h in streak_records)
+            streak_trust_net = sum(h["trust_net"] for h in streak_records)
+            today_tot = history[-1]["total_net"]
+
+            sell_candidates.append({
+                "stock_id": sid,
+                "name": name,
+                "market": market,
+                "direction": "sell",
+                "total_streak": tot_sell_streak,
+                "foreign_streak": f_sell_streak,
+                "trust_streak": t_sell_streak,
+                "main_streak": main_sell_streak,
                 "today_total_net_lots": int(today_tot // 1000),
                 "streak_total_net_lots": int(streak_total_net // 1000),
                 "streak_foreign_net_lots": int(streak_foreign_net // 1000),
@@ -282,6 +333,9 @@ def get_market_streak_candidates(
     formatted_days = [f"{d[:4]}-{d[4:6]}-{d[6:]}" for d in days]
     return {
         "trading_days": formatted_days,
-        "candidates": candidates,
+        "candidates": buy_candidates,
+        "buy_candidates": buy_candidates,
+        "sell_candidates": sell_candidates,
     }
+
 
