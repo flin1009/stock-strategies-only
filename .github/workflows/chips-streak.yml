@@ -2,8 +2,8 @@ name: Chips Streak Evening Scan
 
 on:
   schedule:
-    # 台灣時間 20:00 = UTC 12:00（每週一至週五晚上）
-    - cron: '0 12 * * 1-5'
+    # 台灣時間 20:08 = UTC 12:08（每週一至週五晚上，微調 +8 分鐘避開整點尖峰）
+    - cron: '8 12 * * 1-5'
   workflow_dispatch:  # 允許手動觸發測試
 
 jobs:
