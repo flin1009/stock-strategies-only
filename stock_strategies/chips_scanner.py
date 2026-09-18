@@ -55,6 +55,7 @@ def enrich_candidate_price(candidate: dict) -> dict:
             "today_close": 0.0,
             "today_pct": 0.0,
             "streak_pct": 0.0,
+            "streak_amount": 0.0,
             "recent_daily_pcts": [],
         })
         return candidate
@@ -74,6 +75,10 @@ def enrich_candidate_price(candidate: dict) -> dict:
 
     streak_pct = round(((today_close - base_close) / base_close) * 100, 2) if base_close > 0 else 0.0
 
+    # 累計買/賣超金額（億元）= 張數 * 1000股 * 今日收盤價 / 1億
+    lots = candidate.get("streak_total_net_lots", 0)
+    streak_amount = round((lots * today_close * 1000) / 1e8, 2) if today_close > 0 else 0.0
+
     recent_slice = price_df.tail(max(3, min(streak_len, 5)))
     recent_daily_pcts = [
         f"{r['daily_pct']:+.1f}%" if pd.notna(r["daily_pct"]) else "0.0%"
@@ -84,6 +89,7 @@ def enrich_candidate_price(candidate: dict) -> dict:
         "today_close": today_close,
         "today_pct": today_pct,
         "streak_pct": streak_pct,
+        "streak_amount": streak_amount,
         "recent_daily_pcts": recent_daily_pcts,
     })
     return candidate
@@ -137,22 +143,24 @@ def _process_pool(
             time.sleep(delay_sec)
 
     if is_sell:
-        # 自選股優先置頂，其次連賣天數降冪，其次賣超張數 (負越多越前)
+        # 自選股優先置頂，其次連賣天數降冪，其次累計賣超金額（負最多/絕對值最大），其次賣超張數
         enriched.sort(
             key=lambda x: (
                 1 if x.get("is_watchlist") else 0,
                 x.get("main_streak", 0),
+                abs(x.get("streak_amount", 0.0)),
                 -x.get("streak_total_net_lots", 0),
                 -x.get("streak_pct", 0),
             ),
             reverse=True,
         )
     else:
-        # 自選股優先置頂，其次連買天數降冪，其次買超張數
+        # 自選股優先置頂，其次連買天數降冪，其次累計買超金額（億元），其次買超張數
         enriched.sort(
             key=lambda x: (
                 1 if x.get("is_watchlist") else 0,
                 x.get("main_streak", 0),
+                x.get("streak_amount", 0.0),
                 x.get("streak_total_net_lots", 0),
                 x.get("streak_pct", 0),
             ),

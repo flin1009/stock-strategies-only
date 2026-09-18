@@ -18,7 +18,12 @@ try:
 except ImportError:
     pass
 
-from stock_strategies.sheet import read_watchlist, write_chips_streak, write_chips_sell_streak
+from stock_strategies.sheet import (
+    read_watchlist,
+    read_latest_signals,
+    write_chips_streak,
+    write_chips_sell_streak,
+)
 from stock_strategies.chips_scanner import scan_market_chips_streak
 from stock_strategies.notify import send_telegram, format_chips_streak
 
@@ -104,8 +109,21 @@ def main():
         print(f"⚠️ 寫入 Google Sheet 失敗: {e}", file=sys.stderr)
 
     print("發送 Telegram 晚報推播...")
+    daily_buys = []
     try:
-        msg = format_chips_streak(matched)
+        signals = read_latest_signals(limit=50)
+        if signals:
+            latest_day = signals[0].get("date", "")
+            daily_buys = [
+                s for s in signals
+                if s.get("date") == latest_day and str(s.get("action", "")).upper() == "BUY"
+            ]
+            print(f"  → 讀取今日 ({latest_day}) BUY 訊號共 {len(daily_buys)} 檔進行籌碼覆核")
+    except Exception as e:
+        print(f"⚠️ 讀取選股訊號失敗 (略過覆核): {e}", file=sys.stderr)
+
+    try:
+        msg = format_chips_streak(matched, daily_buys=daily_buys)
         send_telegram(msg)
         print("  → Telegram 推播發送成功")
     except Exception as e:
