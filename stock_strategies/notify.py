@@ -154,144 +154,92 @@ def format_messages(
     market: dict = None,
     night_note: str = None,
 ) -> list[str]:
-    """產生多則 Telegram 訊息"""
+    """產生精實、無重複、一頁式的 Telegram 每日選股決策晚報（瘦身版）。"""
     buys = [s for s in signals if s.get("action") == "BUY"]
     watches = [s for s in signals if s.get("action") == "WATCH"]
-    skips = [s for s in signals if s.get("action") in ("SKIP", "ERROR")]
     today = datetime.now().strftime("%Y/%m/%d")
     total = len(signals)
-    messages = []
 
-    # === 第一則：市場總覽 + 類股強弱 ===
-    msg1 = []
-    msg1.append(f"📊 *V3.0 每日選股報告* {today}")
-    msg1.append(f"掃描 {total} 檔 | BUY {len(buys)} | WATCH {len(watches)} | SKIP {len(skips)}")
-    msg1.append("")
+    lines = []
+    lines.append(f"📊 *V3.2 每日選股決策晚報* {today}")
+    lines.append(f"池內 {total} 檔 | BUY {len(buys)} 檔 | WATCH {len(watches)} 檔")
 
+    # 1. 市場與風控濾鏡總結
+    filter_status = []
     if market and market.get("note"):
-        msg1.append("🎯 *大盤濾鏡*")
-        msg1.append(market["note"])
-        msg1.append("")
-
+        filter_status.append(market["note"])
     if night_note:
-        msg1.append("🌙 *夜盤濾鏡*")
-        msg1.append(night_note)
-        msg1.append("")
+        filter_status.append(night_note)
+    if filter_status:
+        lines.append("🎯 " + " · ".join(filter_status))
 
-    msg1.append("🌡️ *市場氛圍*")
-    msg1.append(_market_sentiment(signals))
-    valid = [s for s in signals if s.get("trend")]
-    if valid:
-        avg_5d = np.mean([s["trend"]["chg_5d"] for s in valid])
-        up_count = sum(1 for s in valid if s["trend"]["chg_5d"] > 0)
-        above_ma20 = sum(1 for s in valid if s["trend"]["above_ma20"])
-        msg1.append(
-            f"池內均漲 {avg_5d:+.1f}% | {up_count}/{len(valid)} 檔上漲 | "
-            f"{above_ma20}/{len(valid)} 檔站上月線"
-        )
-    msg1.append("")
+    sentiment = _market_sentiment(signals)
+    lines.append(f"🌡️ 市場氛圍: {sentiment.split('—')[0].strip()}")
+    lines.append("")
 
-    if watchlist:
-        msg1.append("📡 *類股強弱排名*")
-        msg1.extend(_sector_summary(signals, watchlist))
-        msg1.append("")
-
-    msg1.append("📋 *策略規則*")
-    msg1.append(
-        "基本面(EPS>2,ROE>15) + 技術面(均線/布林/KD/MACD) + 3年回測\n"
-        f"綜合 = 基本面25% + 技術45% + 回測30%\n"
-        f"BUY≥65(三關全過) | WATCH≥50\n"
-        f"停損{CONFIG['stop_loss']*100:.0f}% / 停利{CONFIG['target_return']*100:.0f}% / 持有{CONFIG['hold_days']}日"
-    )
-    messages.append("\n".join(msg1))
-
-    # === 第二則：BUY 詳細 ===
-    msg2 = []
+    # 2. 🟢 BUY — 建議進場標的
+    lines.append(f"🟢 *【BUY — 建議進場】* ({len(buys)} 檔)")
     if buys:
-        msg2.append(f"🟢 *BUY — 建議進場 ({len(buys)})*")
-        msg2.append("")
         for s in buys:
-            msg2.extend(_format_stock_detail(s))
-            msg2.append(f"💡 為何買: {_explain_why(s)}")
-            msg2.append("")
-    else:
-        msg2.append("🟢 *BUY: 今日無符合全部條件的標的*")
-        msg2.append("（需基本面+技術面+回測三關全過）")
-        msg2.append("")
-
-    if watches:
-        top_watches = watches[:8]
-        rest_watches = watches[8:]
-        msg2.append(f"🟡 *WATCH — 接近訊號 TOP {len(top_watches)}*")
-        msg2.append("")
-        for s in top_watches:
-            msg2.extend(_format_stock_detail(s))
-            msg2.append(f"❓ 差在: {_explain_why(s)}")
-            msg2.append("")
-
-        if rest_watches:
-            msg2.append(f"📎 *其他觀察 ({len(rest_watches)})*")
-            rest_line = ", ".join(
-                [f"{s['stock_id']}{s['name']}({s['signal_score']})" for s in rest_watches]
-            )
-            msg2.append(rest_line)
-            msg2.append("")
-    messages.append("\n".join(msg2))
-
-    # === 第三則：操作建議總結 ===
-    msg3 = []
-    msg3.append("🧠 *今日操作建議*")
-    msg3.append("")
-
-    focus = (buys + watches)[:3]
-    if focus:
-        msg3.append("🔑 *最值得關注*")
-        for s in focus:
             c = s.get("components", {})
             t = s.get("trend", {})
-            reason_parts = []
-            if c.get("tech_signals"):
-                reason_parts.append(f"技術面出現{'/'.join(c['tech_signals'])}")
-            if t.get("chg_5d", 0) > 0 and t.get("vol_ratio", 1) > 1.2:
-                reason_parts.append("帶量上攻")
-            if t.get("above_ma20") and t.get("above_ma60"):
-                reason_parts.append("多頭排列")
-            if c.get("backtest_winrate", 0) >= 0.6:
-                reason_parts.append(f"歷史勝率{c['backtest_winrate']*100:.0f}%")
-            reason = "，".join(reason_parts) if reason_parts else "綜合分數領先"
-            msg3.append(
-                f"• *{s['stock_id']} {s['name']}* ({s['action']}, {s['signal_score']}分)"
-            )
-            msg3.append(f"  {reason}")
-            msg3.append(
-                f"  明日開盤進場（參考 {s['entry_price']}）→ "
-                f"損 {s['stop_loss_price']} / 標 {s['target_price']}"
-            )
-            msg3.append("")
-
-    msg3.append("📌 *操作方向*")
-    sentiment = _market_sentiment(signals)
-    if "偏多" in sentiment and "中性" not in sentiment:
-        msg3.append("• 市場偏多，可挑選技術面強勢股分批進場")
-        msg3.append("• 優先選回測勝率>60%、站穩月線的標的")
-    elif "偏多" in sentiment:
-        msg3.append("• 市場中性偏多，選股不選市")
-        msg3.append("• 等拉回月線支撐再找買點，不追高")
-    elif "偏空" in sentiment and "中性" not in sentiment:
-        msg3.append("• 市場偏空，建議空手觀望")
-        msg3.append("• 等止跌訊號出現再考慮進場")
+            tech_sigs = "/".join(c.get("tech_signals", [])) or "多頭指標"
+            vp = " + ".join(c.get("volume_patterns", [])) or "量價穩健"
+            chips_note = c.get("chips_summary", "")
+            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | 技術 {c.get('tech_score', 0)}分)")
+            lines.append(f"  收盤 {s.get('entry_price')} ({t.get('chg_5d', 0):+.1f}% 5日) | 訊號: {tech_sigs}")
+            lines.append(f"  量能: {vp}" + (f" | 籌碼: {chips_note}" if chips_note else ""))
+            lines.append(f"  🎯 開盤進場 → 損 {s['stop_loss_price']} (-8%) / 標 {s['target_price']} (+10%)")
+            if s.get("risk_notes"):
+                lines.append(f"  ⚠️ 提醒: {' / '.join(s['risk_notes'])}")
+            lines.append("")
     else:
-        msg3.append("• 市場中性偏空，控制總部位在半倉以下")
-        msg3.append("• 只做高勝率、風報比好的機會")
-    msg3.append("")
-    msg3.append("_以上為系統自動分析，僅供參考，投資決策請自行判斷_")
-    messages.append("\n".join(msg3))
+        lines.append("• 今日無完全符合條件標的（嚴格風控，建議保守空手）\n")
 
-    # === 第四則：量價深度解析 (V3.1) ===
-    msg4 = _format_deep_analysis(signals, today)
-    messages.append(msg4)
+    # 3. 🟡 WATCH — 接近訊號精選 (TOP 5)
+    top_watches = watches[:5]
+    rest_watches = watches[5:]
+    lines.append(f"🟡 *【WATCH — 接近訊號精選】* (TOP {len(top_watches)})")
+    if top_watches:
+        for s in top_watches:
+            c = s.get("components", {})
+            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分) — 收盤 {s.get('entry_price')}")
+            lines.append(f"  ↳ 差在: {_explain_why(s)}")
+            lines.append(f"  ↳ 參考防守價: {s['stop_loss_price']} (-8%)")
+            lines.append("")
+        if rest_watches:
+            rest_strs = [f"{s['stock_id']}{s['name']}({s['signal_score']})" for s in rest_watches]
+            lines.append(f"📎 *其餘觀察 ({len(rest_watches)} 檔)*: {', '.join(rest_strs)}")
+            lines.append("")
+    else:
+        lines.append("• 今日無觀察標的\n")
 
-    return messages
+    # 4. ⚠️ 異常量價 / 風險警戒
+    danger_stocks = [
+        s for s in signals if "放量滯漲" in s.get("components", {}).get("volume_patterns", [])
+    ]
+    if danger_stocks:
+        lines.append(f"⚠️ *【量能警示 — 放量滯漲】* ({len(danger_stocks)} 檔)")
+        for s in danger_stocks:
+            lines.append(f"• *{s['stock_id']} {s['name']}*: 高檔爆量但收黑或留長上影，慎防主力出貨")
+        lines.append("")
+
+    # 5. 操作叮嚀
+    lines.append("📌 *操作叮嚀*")
+    if "偏多" in sentiment and "中性" not in sentiment:
+        lines.append("• 市場強勢多頭，可順勢布局 BUY 標的，嚴守 8% 停損")
+    elif "偏多" in sentiment:
+        lines.append("• 市場中性偏多，選股不選市，拉回月線有守再承接")
+    elif "偏空" in sentiment:
+        lines.append("• 市場走弱，嚴格控制總倉位在 3 成以下，多看少做")
+    else:
+        lines.append("• 市場分歧，謹慎操作，以風報比佳之個股為主")
+
+    lines.append("")
+    lines.append("💡 _完整評分、歷史回測與個股指標已同步寫入 Google Sheet Signals 分頁_")
+
+    full_text = "\n".join(lines)
+    return [full_text]
 
 
 def _format_deep_analysis(signals: list[dict], today: str) -> str:
@@ -473,7 +421,9 @@ def format_chips_streak(
                 sub_info.append(f"投信連{r['trust_streak']}")
             if r.get("total_streak", 0) > 0:
                 sub_info.append(f"合計連{r['total_streak']}")
-            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張")
+            tr_ratio = r.get("trust_ratio", 0.0)
+            ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
+            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{ratio_str}")
             recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
             lines.append(
                 f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
@@ -498,7 +448,9 @@ def format_chips_streak(
                 sub_info.append(f"外資連{r['foreign_streak']}")
             if r.get("trust_streak", 0) > 0:
                 sub_info.append(f"投信連{r['trust_streak']}")
-            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張")
+            tr_ratio = r.get("trust_ratio", 0.0)
+            ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
+            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{ratio_str}")
             recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
             lines.append(
                 f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
@@ -526,7 +478,9 @@ def format_chips_streak(
                 sub_info.append(f"投信連{r['trust_streak']}")
             if r.get("total_streak", 0) > 0:
                 sub_info.append(f"合計連{r['total_streak']}")
-            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張")
+            tr_ratio = r.get("trust_ratio", 0.0)
+            ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
+            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{ratio_str}")
             recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
             lines.append(
                 f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
@@ -551,7 +505,9 @@ def format_chips_streak(
                 sub_info.append(f"外資連{r['foreign_streak']}")
             if r.get("trust_streak", 0) > 0:
                 sub_info.append(f"投信連{r['trust_streak']}")
-            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張")
+            tr_ratio = r.get("trust_ratio", 0.0)
+            ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
+            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{ratio_str}")
             recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
             lines.append(
                 f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"

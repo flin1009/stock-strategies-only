@@ -40,6 +40,72 @@ def _parse_int(val) -> int:
             return 0
 
 
+def get_market_capital_map(force_refresh: bool = False, timeout: int = 15) -> dict[str, int]:
+    """取得全市場 (TWSE + TPEx) 公司已發行普通股數字典 {stock_id: shares_issued}。
+    快取於 .cache/exchange/market_capital.json，有效天數 7 天。
+    """
+    _ensure_cache_dir()
+    cache_file = EXCHANGE_CACHE_DIR / "market_capital.json"
+    if not force_refresh and cache_file.exists():
+        try:
+            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            if datetime.now() - mtime < timedelta(days=7):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
+    cap_map: dict[str, int] = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    # 1. TWSE 上市 (t187ap03_L)
+    try:
+        r = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", headers=headers, timeout=timeout)
+        if r.ok:
+            for item in r.json():
+                sid = str(item.get("公司代號", "")).strip()
+                if not sid:
+                    continue
+                shares = _parse_int(item.get("已發行普通股數或TDR原股發行股數"))
+                if shares <= 0:
+                    shares = _parse_int(item.get("實收資本額")) // 10
+                if shares > 0:
+                    cap_map[sid] = shares
+    except Exception as e:
+        print(f"[TWSE] 抓取股本資料失敗: {e}")
+
+    # 2. TPEx 上櫃 (mopsfin_t187ap03_O)
+    try:
+        r = requests.get("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", headers=headers, timeout=timeout)
+        if r.ok:
+            for item in r.json():
+                sid = str(item.get("SecuritiesCompanyCode", "")).strip()
+                if not sid:
+                    continue
+                shares = _parse_int(item.get("IssueShares"))
+                if shares <= 0:
+                    shares = _parse_int(item.get("Paidin.Capital.NTDollars")) // 10
+                if shares > 0:
+                    cap_map[sid] = shares
+    except Exception as e:
+        print(f"[TPEx] 抓取股本資料失敗: {e}")
+
+    if cap_map:
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(cap_map, f, ensure_ascii=False)
+        except Exception:
+            pass
+    elif cache_file.exists():
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    return cap_map
+
+
 def fetch_twse_t86(date_str: str, timeout: int = 15) -> pd.DataFrame:
     """抓取指定日期 (YYYYMMDD) 證交所上市股票三大法人買賣超 (T86)。
 
@@ -202,6 +268,10 @@ def get_market_streak_candidates(
     latest_day = days[-1]
     latest_df = daily_dfs[latest_day]
 
+    cap_map = get_market_capital_map()
+    now = datetime.now()
+    is_season_end = (now.month in (3, 6, 9, 12)) and (now.day >= 15)
+
     buy_candidates = []
     sell_candidates = []
     for sid, row in latest_df.iterrows():
@@ -212,6 +282,7 @@ def get_market_streak_candidates(
 
         name = str(row.get("name", "")).strip()
         market = str(row.get("market", "")).strip()
+        shares = cap_map.get(sid, 0)
 
         history = []
         for d in days:
@@ -258,27 +329,31 @@ def get_market_streak_candidates(
         main_buy_streak = max(tot_buy_streak, f_buy_streak, t_buy_streak)
 
         if main_buy_streak >= min_streak:
-            tags = []
-            if f_buy_streak >= min_streak and t_buy_streak >= min_streak:
-                tags.append("土洋同買")
-            elif t_buy_streak >= min_streak:
-                tags.append("投信認養")
-            elif f_buy_streak >= min_streak:
-                tags.append("外資買進")
-            elif tot_buy_streak >= min_streak:
-                tags.append("法人合買")
-
             streak_records = history[-main_buy_streak:]
             streak_total_net = sum(h["total_net"] for h in streak_records)
             streak_foreign_net = sum(h["foreign_net"] for h in streak_records)
             streak_trust_net = sum(h["trust_net"] for h in streak_records)
             today_tot = history[-1]["total_net"]
 
+            trust_ratio = round((streak_trust_net / shares) * 100, 2) if shares > 0 else 0.0
+
+            tags = []
+            if f_buy_streak >= min_streak and t_buy_streak >= min_streak:
+                tags.append("土洋同買")
+            elif t_buy_streak >= min_streak or trust_ratio >= 0.2:
+                tags.append("投信認養")
+            elif f_buy_streak >= min_streak:
+                tags.append("外資買進")
+            elif tot_buy_streak >= min_streak:
+                tags.append("法人合買")
+
             buy_candidates.append({
                 "stock_id": sid,
                 "name": name,
                 "market": market,
                 "direction": "buy",
+                "shares_issued": shares,
+                "trust_ratio": trust_ratio,
                 "total_streak": tot_buy_streak,
                 "foreign_streak": f_buy_streak,
                 "trust_streak": t_buy_streak,
@@ -297,27 +372,33 @@ def get_market_streak_candidates(
         main_sell_streak = max(tot_sell_streak, f_sell_streak, t_sell_streak)
 
         if main_sell_streak >= min_streak:
-            tags = []
-            if f_sell_streak >= min_streak and t_sell_streak >= min_streak:
-                tags.append("土洋同賣")
-            elif t_sell_streak >= min_streak:
-                tags.append("投信結帳")
-            elif f_sell_streak >= min_streak:
-                tags.append("外資提款")
-            elif tot_sell_streak >= min_streak:
-                tags.append("法人合賣")
-
             streak_records = history[-main_sell_streak:]
             streak_total_net = sum(h["total_net"] for h in streak_records)
             streak_foreign_net = sum(h["foreign_net"] for h in streak_records)
             streak_trust_net = sum(h["trust_net"] for h in streak_records)
             today_tot = history[-1]["total_net"]
 
+            trust_ratio = round((streak_trust_net / shares) * 100, 2) if shares > 0 else 0.0
+
+            tags = []
+            if f_sell_streak >= min_streak and t_sell_streak >= min_streak:
+                tags.append("土洋同賣")
+            elif t_sell_streak >= min_streak or trust_ratio <= -0.2:
+                tags.append("投信結帳")
+                if is_season_end:
+                    tags.append("季底警戒")
+            elif f_sell_streak >= min_streak:
+                tags.append("外資提款")
+            elif tot_sell_streak >= min_streak:
+                tags.append("法人合賣")
+
             sell_candidates.append({
                 "stock_id": sid,
                 "name": name,
                 "market": market,
                 "direction": "sell",
+                "shares_issued": shares,
+                "trust_ratio": trust_ratio,
                 "total_streak": tot_sell_streak,
                 "foreign_streak": f_sell_streak,
                 "trust_streak": t_sell_streak,

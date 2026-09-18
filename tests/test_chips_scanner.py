@@ -249,22 +249,25 @@ def test_write_chips_streak(monkeypatch):
         "total_streak": 3,
         "foreign_streak": 3,
         "trust_streak": 3,
+        "trust_ratio": 0.35,
         "streak_total_net_lots": 10000,
         "today_total_net_lots": 3000,
         "today_close": 1000.0,
         "today_pct": 1.5,
         "streak_pct": 4.5,
         "recent_daily_pcts": ["+1.0%", "+2.0%", "+1.5%"],
-        "tags": ["土洋同買"],
+        "tags": ["土洋同買", "投信認養"],
     }]
 
     write_chips_streak(records)
     assert fake_ws.cleared is True
     assert "is_watchlist" in CHIPS_STREAK_HEADERS
+    assert "trust_ratio" in CHIPS_STREAK_HEADERS
     assert fake_ws.header_row == CHIPS_STREAK_HEADERS
     assert len(fake_ws.rows) == 1
     assert fake_ws.rows[0][1] == "2330"
     assert fake_ws.rows[0][3] == "⭐ 是"
+    assert fake_ws.rows[0][7] == "+0.35%"
 
 
 def test_write_chips_sell_streak(monkeypatch):
@@ -299,13 +302,14 @@ def test_write_chips_sell_streak(monkeypatch):
         "total_streak": 3,
         "foreign_streak": 3,
         "trust_streak": 0,
+        "trust_ratio": -0.22,
         "streak_total_net_lots": -5000,
         "today_total_net_lots": -1500,
         "today_close": 1400.0,
         "today_pct": -1.5,
         "streak_pct": -4.5,
         "recent_daily_pcts": ["-1.0%", "-2.0%", "-1.5%"],
-        "tags": ["外資提款"],
+        "tags": ["外資提款", "投信結帳"],
     }]
 
     write_chips_sell_streak(records)
@@ -314,3 +318,55 @@ def test_write_chips_sell_streak(monkeypatch):
     assert len(fake_ws.rows) == 1
     assert fake_ws.rows[0][1] == "2454"
     assert fake_ws.rows[0][3] == "⭐ 是"
+    assert fake_ws.rows[0][7] == "-0.22%"
+
+
+def test_format_messages_lean():
+    from stock_strategies.notify import format_messages
+
+    signals = [
+        {
+            "stock_id": "2330",
+            "name": "台積電",
+            "action": "BUY",
+            "signal_score": 78.5,
+            "entry_price": 1000.0,
+            "stop_loss_price": 920.0,
+            "target_price": 1100.0,
+            "components": {
+                "tech_score": 85,
+                "tech_signals": ["均線多頭", "MACD多頭"],
+                "volume_patterns": ["倍量柱"],
+                "chips_summary": "土洋同買",
+            },
+            "trend": {"chg_5d": 3.2},
+            "risk_notes": [],
+        },
+        {
+            "stock_id": "2454",
+            "name": "聯發科",
+            "action": "WATCH",
+            "signal_score": 62.0,
+            "entry_price": 1400.0,
+            "stop_loss_price": 1288.0,
+            "target_price": 1540.0,
+            "components": {
+                "tech_score": 60,
+                "tech_signals": ["KD黃金交叉"],
+                "volume_patterns": [],
+            },
+            "trend": {"chg_5d": -0.5},
+            "risk_notes": [],
+        },
+    ]
+
+    messages = format_messages(signals)
+    assert len(messages) == 1  # 瘦身後濃縮為 1 則訊息
+    msg = messages[0]
+    assert "V3.2 每日選股決策晚報" in msg
+    assert "【BUY — 建議進場】" in msg
+    assert "台積電" in msg
+    assert "【WATCH — 接近訊號精選】" in msg
+    assert "聯發科" in msg
+    assert "策略規則" not in msg  # 重複冗贅規則已移除
+    assert "量價字典速查" not in msg  # 重複量價字典已移除

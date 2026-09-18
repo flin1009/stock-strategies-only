@@ -39,10 +39,11 @@ _PARAM_DEFAULTS: dict = {
     # 風險
     "target_return": CONFIG["target_return"],
     "stop_loss": CONFIG["stop_loss"],
-    # 評分加權
-    "weight_fundamental": 0.3,
-    "weight_technical": 0.3,
-    "weight_backtest": 0.4,
+    # 評分加權 (四維權重模型：籌碼25% + 技術35% + 基本25% + 回測15%)
+    "weight_chips": 0.25,
+    "weight_technical": 0.35,
+    "weight_fundamental": 0.25,
+    "weight_backtest": 0.15,
     "min_total_score_for_buy": CONFIG["min_total_score_for_buy"],
     "min_tech_score_for_buy": 50,
     # 技術訊號開關
@@ -90,14 +91,16 @@ def merge_params(strategy: Optional[dict]) -> dict:
             merged[k] = v
     # 健全性：權重總和不為 0
     total = (
-        merged["weight_fundamental"]
-        + merged["weight_technical"]
-        + merged["weight_backtest"]
+        merged.get("weight_chips", 0.25)
+        + merged.get("weight_technical", 0.35)
+        + merged.get("weight_fundamental", 0.25)
+        + merged.get("weight_backtest", 0.15)
     )
     if total <= 0:
-        merged["weight_fundamental"] = 0.3
-        merged["weight_technical"] = 0.3
-        merged["weight_backtest"] = 0.4
+        merged["weight_chips"] = 0.25
+        merged["weight_technical"] = 0.35
+        merged["weight_fundamental"] = 0.25
+        merged["weight_backtest"] = 0.15
     return merged
 
 

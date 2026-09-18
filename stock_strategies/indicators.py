@@ -67,6 +67,13 @@ def tech_score_at(row: pd.Series, params: dict | None = None) -> dict:
         if 0 < dist < 0.03:
             score += max_per
             signals.append("布林下軌反彈")
+        elif row["close"] >= row["bb_mid"]:
+            if pd.notna(row.get("bb_upper")) and row["close"] > row["bb_upper"]:
+                score += max_per * 0.7
+                signals.append("突破布林上軌")
+            else:
+                score += max_per * 0.85
+                signals.append("站穩布林中軌")
         elif row["close"] < row["bb_mid"]:
             score += max_per * 0.4
 

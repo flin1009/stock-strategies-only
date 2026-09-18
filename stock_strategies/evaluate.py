@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
 
 from .config import CONFIG
 from .data import get_fundamental, get_price_history
+from .datasources import get_institutional
 from .indicators import add_indicators, tech_score_at
 from .backtest import backtest
 from .volume import detect_patterns, verdict as volume_verdict
@@ -50,20 +51,80 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
         else:
             vp = {"patterns": [], "bonus": 0, "details": {}}
 
-        fund_score = 100 if fund_pass else 40
+        # 1. 平滑基本面評分 (0 ~ 100)
+        min_eps = min(eps_vals) if eps_vals else 0.0
+        min_roe = min(roe_vals) if roe_vals else 0.0
+        eps_score = min(50.0, max(0.0, (min_eps / 4.0) * 50.0))
+        roe_score = min(50.0, max(0.0, ((min_roe - 5.0) / 20.0) * 50.0))
+        fund_score = round(min(100.0, max(20.0, eps_score + roe_score)), 1)
+
+        # 2. 技術面評分
         tech_score = max(0, min(100, ts["score"] + vp["bonus"]))
-        winrate = bt.get("winrate") or 0.5
-        bt_score = winrate * 100
 
-        wf = params["weight_fundamental"]
-        wt = params["weight_technical"]
-        wb = params["weight_backtest"]
-        # 正規化權重
-        wsum = wf + wt + wb
+        # 3. 回測評分（貝氏平滑：以 10 筆 50% 基準平滑極端值）
+        samples = bt.get("samples", 0)
+        raw_winrate = bt.get("winrate") or 0.5
+        if samples > 0:
+            shrunk_winrate = (raw_winrate * samples + 0.5 * 10) / (samples + 10)
+        else:
+            shrunk_winrate = 0.5
+        bt_score = round(shrunk_winrate * 100, 1)
+
+        # 4. 籌碼面評分 (0 ~ 100，基準 50 分中性)
+        chips_score = 50.0
+        chips_summary = ""
+        try:
+            start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+            inst_df = get_institutional(stock_id, start=start_date)
+            if not inst_df.empty and len(inst_df) >= 3:
+                inst_slice = inst_df.tail(5)
+                tot_5d = inst_slice["total_net"].sum()
+                t_streak = 0
+                for v in reversed(inst_df["trust_net"].tolist()):
+                    if v > 0:
+                        t_streak += 1
+                    else:
+                        break
+                f_streak = 0
+                for v in reversed(inst_df["foreign_net"].tolist()):
+                    if v > 0:
+                        f_streak += 1
+                    else:
+                        break
+
+                delta = 0.0
+                if t_streak >= 3 and f_streak >= 3:
+                    delta += 25.0
+                    chips_summary = f"土洋同買(投信連{t_streak}/外資連{f_streak})"
+                elif t_streak >= 3:
+                    delta += 20.0
+                    chips_summary = f"投信認養(連{t_streak}天)"
+                elif f_streak >= 3:
+                    delta += 15.0
+                    chips_summary = f"外資買進(連{f_streak}天)"
+                elif tot_5d > 0:
+                    delta += 10.0
+                    chips_summary = "5日法人淨買超"
+                elif t_streak == 0 and f_streak == 0 and tot_5d < 0:
+                    delta -= 15.0
+                    chips_summary = "5日法人調節"
+
+                chips_score = min(100.0, max(0.0, 50.0 + delta))
+        except Exception:
+            pass
+
+        # 四維權重模型
+        wc = params.get("weight_chips", 0.25)
+        wt = params.get("weight_technical", 0.35)
+        wf = params.get("weight_fundamental", 0.25)
+        wb = params.get("weight_backtest", 0.15)
+        wsum = wc + wt + wf + wb
         if wsum > 0:
-            wf, wt, wb = wf / wsum, wt / wsum, wb / wsum
+            wc, wt, wf, wb = wc / wsum, wt / wsum, wf / wsum, wb / wsum
 
-        signal_score = round(wf * fund_score + wt * tech_score + wb * bt_score, 1)
+        signal_score = round(
+            wc * chips_score + wt * tech_score + wf * fund_score + wb * bt_score, 1
+        )
 
         fund_gate = (not params["fundamental_pass_required"]) or fund_pass
         if (
@@ -91,8 +152,8 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
             result["risk_notes"].append(f"回測樣本僅 {bt.get('samples', 0)} 次，統計弱")
         if not fund_pass:
             result["risk_notes"].append("基本面未過門檻")
-        if winrate < 0.5:
-            result["risk_notes"].append(f"歷史勝率 {winrate*100:.0f}% 低於五成")
+        if raw_winrate < 0.5:
+            result["risk_notes"].append(f"歷史勝率 {raw_winrate*100:.0f}% 低於五成")
         if pd.notna(latest.get("bb_upper")) and latest["close"] > latest["bb_upper"]:
             result["risk_notes"].append("已突破布林上軌，追高風險")
         if "放量滯漲" in vp["patterns"]:
@@ -114,12 +175,15 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
             "signal_score": signal_score,
             "components": {
                 "fundamental_pass": fund_pass,
+                "fundamental_score": fund_score,
                 "eps_min": min(eps_vals) if eps_vals else None,
                 "roe_min": min(roe_vals) if roe_vals else None,
                 "tech_score": tech_score,
                 "tech_signals": ts["signals"],
-                "backtest_winrate": winrate,
-                "backtest_samples": bt.get("samples", 0),
+                "chips_score": chips_score,
+                "chips_summary": chips_summary,
+                "backtest_winrate": round(shrunk_winrate, 3),
+                "backtest_samples": samples,
                 "volume_patterns": vp["patterns"],
                 "volume_details": vp["details"],
                 "volume_bonus": vp["bonus"],
