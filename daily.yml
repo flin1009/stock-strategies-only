@@ -2,8 +2,8 @@ name: V3 Daily Signal
 
 on:
   schedule:
-    # 台灣時間 14:35 = UTC 06:35 (台股收盤零股結算後，微調 +5 分鐘避開半點尖峰)
-    - cron: '35 6 * * 1-5'
+    # 台灣時間 16:38 = UTC 08:38 (三大法人籌碼發布後完整結算，微調避開半點尖峰)
+    - cron: '38 8 * * 1-5'
   workflow_dispatch:  # 允許手動觸發測試
 
 jobs:
