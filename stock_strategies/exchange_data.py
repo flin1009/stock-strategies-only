@@ -40,6 +40,18 @@ def _parse_int(val) -> int:
             return 0
 
 
+def _parse_float(val) -> Optional[float]:
+    if val is None or pd.isna(val):
+        return None
+    s = str(val).replace(",", "").strip()
+    if not s or s == "-":
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def get_market_capital_map(force_refresh: bool = False, timeout: int = 15) -> dict[str, int]:
     """取得全市場 (TWSE + TPEx) 公司已發行普通股數字典 {stock_id: shares_issued}。
     快取於 .cache/exchange/market_capital.json，有效天數 7 天。
@@ -104,6 +116,155 @@ def get_market_capital_map(force_refresh: bool = False, timeout: int = 15) -> di
             pass
 
     return cap_map
+
+
+def get_market_valuation_map(force_refresh: bool = False, timeout: int = 15) -> dict[str, dict]:
+    """取得全市場 (TWSE + TPEx) 當日個股即時本益比 (PE)、殖利率 (Yield)、淨值比 (PB) 快照。
+    快取於 .cache/exchange/market_valuation.json，有效天數 16 小時。
+    """
+    _ensure_cache_dir()
+    cache_file = EXCHANGE_CACHE_DIR / "market_valuation.json"
+    if not force_refresh and cache_file.exists():
+        try:
+            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            if datetime.now() - mtime < timedelta(hours=16):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
+    val_map: dict[str, dict] = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    # 1. TWSE 上市本益比、殖利率 (BWIBBU_ALL)
+    try:
+        r = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL", headers=headers, timeout=timeout)
+        if r.ok:
+            for item in r.json():
+                sid = str(item.get("Code", "")).strip()
+                if sid:
+                    val_map[sid] = {
+                        "pe": _parse_float(item.get("PEratio")),
+                        "yield": _parse_float(item.get("DividendYield")) or 0.0,
+                        "pb": _parse_float(item.get("PBratio")) or 0.0,
+                    }
+    except Exception as e:
+        print(f"[TWSE] 抓取本益比/殖利率資料失敗: {e}")
+
+    # 2. TPEx 上櫃本益比、殖利率 (tpex_mainboard_peratio_analysis)
+    try:
+        r = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis", headers=headers, timeout=timeout)
+        if r.ok:
+            for item in r.json():
+                sid = str(item.get("SecuritiesCompanyCode", "")).strip()
+                if sid:
+                    val_map[sid] = {
+                        "pe": _parse_float(item.get("PriceEarningRatio")),
+                        "yield": _parse_float(item.get("YieldRatio")) or 0.0,
+                        "pb": _parse_float(item.get("PriceBookRatio")) or 0.0,
+                    }
+    except Exception as e:
+        print(f"[TPEx] 抓取本益比/殖利率資料失敗: {e}")
+
+    if val_map:
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(val_map, f, ensure_ascii=False)
+        except Exception:
+            pass
+    elif cache_file.exists():
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    return val_map
+
+
+def get_market_margin_map(force_refresh: bool = False, timeout: int = 15) -> dict:
+    """取得全市場 (TWSE + TPEx) 當日個股融資融券餘額與增減張數快照。
+    快取於 .cache/exchange/market_margin.json，有效天數 16 小時。
+    回傳 dict: {"stocks": {stock_id: {...}}, "market_total_margin_diff_lots": int}
+    """
+    _ensure_cache_dir()
+    cache_file = EXCHANGE_CACHE_DIR / "market_margin.json"
+    if not force_refresh and cache_file.exists():
+        try:
+            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            if datetime.now() - mtime < timedelta(hours=16):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
+    margin_stocks: dict[str, dict] = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    # 1. TWSE 上市融資融券 (MI_MARGN)
+    try:
+        r = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/MI_MARGN", headers=headers, timeout=timeout)
+        if r.ok:
+            for item in r.json():
+                sid = str(item.get("股票代號", "")).strip()
+                if sid:
+                    today = _parse_int(item.get("融資今日餘額"))
+                    prev = _parse_int(item.get("融資前日餘額"))
+                    s_today = _parse_int(item.get("融券今日餘額"))
+                    s_prev = _parse_int(item.get("融券前日餘額"))
+                    margin_stocks[sid] = {
+                        "margin_today": today,
+                        "margin_prev": prev,
+                        "margin_diff": today - prev,
+                        "short_today": s_today,
+                        "short_prev": s_prev,
+                        "short_diff": s_today - s_prev,
+                    }
+    except Exception as e:
+        print(f"[TWSE] 抓取融資融券資料失敗: {e}")
+
+    # 2. TPEx 上櫃融資融券 (tpex_mainboard_margin_balance)
+    try:
+        r = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance", headers=headers, timeout=timeout)
+        if r.ok:
+            for item in r.json():
+                sid = str(item.get("SecuritiesCompanyCode", "")).strip()
+                if sid:
+                    today = _parse_int(item.get("MarginPurchaseBalance"))
+                    prev = _parse_int(item.get("MarginPurchaseBalancePreviousDay"))
+                    s_today = _parse_int(item.get("ShortSaleBalance"))
+                    s_prev = _parse_int(item.get("ShortSaleBalancePreviousDay"))
+                    margin_stocks[sid] = {
+                        "margin_today": today,
+                        "margin_prev": prev,
+                        "margin_diff": today - prev,
+                        "short_today": s_today,
+                        "short_prev": s_prev,
+                        "short_diff": s_today - s_prev,
+                    }
+    except Exception as e:
+        print(f"[TPEx] 抓取融資融券資料失敗: {e}")
+
+    tot_diff = sum(s["margin_diff"] for s in margin_stocks.values())
+    result = {
+        "stocks": margin_stocks,
+        "market_total_margin_diff_lots": tot_diff,
+    }
+
+    if margin_stocks:
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False)
+        except Exception:
+            pass
+    elif cache_file.exists():
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    return result
 
 
 def fetch_twse_t86(date_str: str, timeout: int = 15) -> pd.DataFrame:

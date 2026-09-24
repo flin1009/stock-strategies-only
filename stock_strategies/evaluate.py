@@ -6,6 +6,7 @@ import pandas as pd
 from .config import CONFIG
 from .data import get_fundamental, get_price_history
 from .datasources import get_institutional
+from .exchange_data import get_market_valuation_map
 from .indicators import add_indicators, tech_score_at
 from .backtest import backtest
 from .volume import detect_patterns, verdict as volume_verdict
@@ -51,12 +52,39 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
         else:
             vp = {"patterns": [], "bonus": 0, "details": {}}
 
-        # 1. 平滑基本面評分 (0 ~ 100)
+        # 1. 基本面評分 (結合財報 EPS/ROE 與 證交所/櫃買 官方即時 PE/殖利率快照)
         min_eps = min(eps_vals) if eps_vals else 0.0
         min_roe = min(roe_vals) if roe_vals else 0.0
         eps_score = min(50.0, max(0.0, (min_eps / 4.0) * 50.0))
         roe_score = min(50.0, max(0.0, ((min_roe - 5.0) / 20.0) * 50.0))
-        fund_score = round(min(100.0, max(20.0, eps_score + roe_score)), 1)
+        fund_score = min(100.0, max(20.0, eps_score + roe_score))
+
+        # 融入官方最新 PE 與 殖利率
+        val_info = {}
+        try:
+            val_map = get_market_valuation_map()
+            val_info = val_map.get(str(stock_id).strip(), {})
+        except Exception:
+            pass
+
+        pe_val = val_info.get("pe")
+        yield_val = val_info.get("yield", 0.0)
+        pb_val = val_info.get("pb", 0.0)
+
+        if yield_val >= 5.0:
+            fund_score += 10.0
+        elif yield_val >= 3.5:
+            fund_score += 5.0
+
+        if pe_val is not None:
+            if 0 < pe_val <= 16.0:
+                fund_score += 5.0
+            elif pe_val > 50.0:
+                fund_score -= 10.0
+        else:
+            fund_score -= 5.0
+
+        fund_score = round(min(100.0, max(0.0, fund_score)), 1)
 
         # 2. 技術面評分
         tech_score = max(0, min(100, ts["score"] + vp["bonus"]))
@@ -188,6 +216,11 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
                 "volume_details": vp["details"],
                 "volume_bonus": vp["bonus"],
                 "volume_verdict": volume_verdict(vp["patterns"]),
+                "valuation": {
+                    "pe": pe_val,
+                    "yield": yield_val,
+                    "pb": pb_val,
+                },
             },
             "trend": {
                 "chg_5d": round(chg_5d, 2),

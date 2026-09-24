@@ -10,7 +10,7 @@ from typing import Optional
 
 import pandas as pd
 
-from .exchange_data import get_market_streak_candidates
+from .exchange_data import get_market_streak_candidates, get_market_margin_map
 from .data import get_price_history
 
 
@@ -56,6 +56,8 @@ def enrich_candidate_price(candidate: dict) -> dict:
             "today_pct": 0.0,
             "streak_pct": 0.0,
             "streak_amount": 0.0,
+            "margin_diff": None,
+            "margin_today": None,
             "recent_daily_pcts": [],
         })
         return candidate
@@ -79,6 +81,17 @@ def enrich_candidate_price(candidate: dict) -> dict:
     lots = candidate.get("streak_total_net_lots", 0)
     streak_amount = round((lots * today_close * 1000) / 1e8, 2) if today_close > 0 else 0.0
 
+    # 融入融資增減資訊
+    margin_diff = None
+    margin_today = None
+    try:
+        m_map = get_market_margin_map().get("stocks", {})
+        if sid in m_map:
+            margin_diff = m_map[sid].get("margin_diff")
+            margin_today = m_map[sid].get("margin_today")
+    except Exception:
+        pass
+
     recent_slice = price_df.tail(max(3, min(streak_len, 5)))
     recent_daily_pcts = [
         f"{r['daily_pct']:+.1f}%" if pd.notna(r["daily_pct"]) else "0.0%"
@@ -90,6 +103,8 @@ def enrich_candidate_price(candidate: dict) -> dict:
         "today_pct": today_pct,
         "streak_pct": streak_pct,
         "streak_amount": streak_amount,
+        "margin_diff": margin_diff,
+        "margin_today": margin_today,
         "recent_daily_pcts": recent_daily_pcts,
     })
     return candidate

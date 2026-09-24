@@ -487,3 +487,223 @@ def test_format_chips_streak_cross_confirmation():
     assert "(+150.0億)" in msg
     assert "🚨 *籌碼背離* *2454 聯發科*" in msg
     assert "(-28.0億)" in msg
+
+
+def test_get_market_valuation_map(monkeypatch, tmp_path):
+    from stock_strategies import exchange_data
+    monkeypatch.setattr(exchange_data, "EXCHANGE_CACHE_DIR", tmp_path)
+
+    twse_json = [
+        {"Code": "2330", "PEratio": "18.5", "DividendYield": "3.20", "PBratio": "4.50"},
+        {"Code": "2317", "PEratio": "-", "DividendYield": "4.50", "PBratio": "1.20"},
+    ]
+    tpex_json = [
+        {"SecuritiesCompanyCode": "8069", "PriceEarningRatio": "22.0", "YieldRatio": "2.80", "PriceBookRatio": "3.10"}
+    ]
+
+    class FakeResponse:
+        def __init__(self, data):
+            self._data = data
+            self.ok = True
+        def json(self):
+            return self._data
+
+    def fake_get(url, *args, **kwargs):
+        if "BWIBBU_ALL" in url:
+            return FakeResponse(twse_json)
+        return FakeResponse(tpex_json)
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    vmap = exchange_data.get_market_valuation_map(force_refresh=True)
+    assert "2330" in vmap
+    assert vmap["2330"]["pe"] == 18.5
+    assert vmap["2330"]["yield"] == 3.2
+    assert vmap["2330"]["pb"] == 4.5
+    assert vmap["2317"]["pe"] is None
+    assert vmap["2317"]["yield"] == 4.5
+    assert vmap["8069"]["pe"] == 22.0
+
+
+def test_get_market_margin_map(monkeypatch, tmp_path):
+    from stock_strategies import exchange_data
+    monkeypatch.setattr(exchange_data, "EXCHANGE_CACHE_DIR", tmp_path)
+
+    twse_margin = [
+        {"股票代號": "2330", "融資今日餘額": "10,000", "融資前日餘額": "10,500", "融券今日餘額": "500", "融券前日餘額": "400"},
+    ]
+    tpex_margin = [
+        {"SecuritiesCompanyCode": "8069", "MarginPurchaseBalance": "3,000", "MarginPurchaseBalancePreviousDay": "2,800", "ShortSaleBalance": "100", "ShortSaleBalancePreviousDay": "100"}
+    ]
+
+    class FakeResponse:
+        def __init__(self, data):
+            self._data = data
+            self.ok = True
+        def json(self):
+            return self._data
+
+    def fake_get(url, *args, **kwargs):
+        if "MI_MARGN" in url:
+            return FakeResponse(twse_margin)
+        return FakeResponse(tpex_margin)
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    mmap = exchange_data.get_market_margin_map(force_refresh=True)
+    stocks = mmap["stocks"]
+    assert "2330" in stocks
+    assert stocks["2330"]["margin_diff"] == -500
+    assert stocks["8069"]["margin_diff"] == 200
+    assert mmap["market_total_margin_diff_lots"] == -300
+
+
+def test_format_messages_with_valuation():
+    from stock_strategies.notify import format_messages
+
+    signals = [
+        {
+            "stock_id": "2330",
+            "name": "台積電",
+            "action": "BUY",
+            "signal_score": 85.0,
+            "entry_price": 1000.0,
+            "stop_loss_price": 920.0,
+            "target_price": 1100.0,
+            "components": {
+                "tech_score": 85,
+                "tech_signals": ["均線多頭"],
+                "valuation": {"pe": 18.2, "yield": 3.5, "pb": 4.5},
+            },
+            "trend": {"chg_5d": 3.0},
+        },
+        {
+            "stock_id": "2454",
+            "name": "聯發科",
+            "action": "WATCH",
+            "signal_score": 65.0,
+            "entry_price": 1400.0,
+            "stop_loss_price": 1288.0,
+            "components": {
+                "tech_score": 65,
+                "valuation": {"pe": None, "yield": 0.0, "pb": None},
+            },
+            "trend": {"chg_5d": -1.0},
+        }
+    ]
+    msgs = format_messages(signals)
+    assert len(msgs) == 1
+    assert "• *2330 台積電* (綜合 85.0分 | PE 18.2x · 殖 3.5%)" in msgs[0]
+    assert "• *2454 聯發科* (綜合 65.0分 | PE -- · 殖 0%)" in msgs[0]
+
+
+def test_format_chips_streak_with_margin():
+    from stock_strategies.notify import format_chips_streak
+
+    buy_records = [
+        {
+            "stock_id": "2330",
+            "name": "台積電",
+            "is_watchlist": True,
+            "main_streak": 3,
+            "foreign_streak": 3,
+            "trust_streak": 0,
+            "streak_total_net_lots": 5000,
+            "streak_amount": 50.0,
+            "margin_diff": -650,
+            "today_close": 1000.0,
+            "today_pct": 1.0,
+            "streak_pct": 3.0,
+        },
+        {
+            "stock_id": "2603",
+            "name": "長榮",
+            "is_watchlist": False,
+            "main_streak": 3,
+            "foreign_streak": 3,
+            "trust_streak": 0,
+            "streak_total_net_lots": 3000,
+            "streak_amount": 6.0,
+            "margin_diff": 450,
+            "today_close": 200.0,
+            "today_pct": 2.0,
+            "streak_pct": 5.0,
+        }
+    ]
+    sell_records = [
+        {
+            "stock_id": "2454",
+            "name": "聯發科",
+            "is_watchlist": True,
+            "main_streak": 3,
+            "foreign_streak": 3,
+            "trust_streak": 0,
+            "streak_total_net_lots": -2000,
+            "streak_amount": -28.0,
+            "margin_diff": 350,
+            "today_close": 1400.0,
+            "today_pct": -1.5,
+            "streak_pct": -3.5,
+        }
+    ]
+
+    scan_res = {
+        "buy_records": buy_records,
+        "sell_records": sell_records,
+        "market_total_margin_diff_lots": -12500,
+    }
+
+    msg = format_chips_streak(scan_res)
+    assert "融資 -12,500張 (浮額沉澱)" in msg
+    assert "融資-650張🔥" in msg
+    assert "融資+450張⚠️" in msg
+    assert "融資+350張⚠️" in msg
+
+
+def test_append_signals_valuation(monkeypatch):
+    from stock_strategies.sheet import append_signals
+
+    class FakeWorksheet:
+        def __init__(self):
+            self.header = None
+            self.rows = []
+        def append_row(self, row):
+            self.header = row
+        def append_rows(self, rows):
+            self.rows.extend(rows)
+
+    fake_ws = FakeWorksheet()
+    class FakeSheet:
+        def worksheet(self, title):
+            return fake_ws
+
+    monkeypatch.setattr("stock_strategies.sheet.get_gsheet", lambda: FakeSheet())
+
+    signals = [{
+        "date": "2026-09-24",
+        "stock_id": "2330",
+        "name": "台積電",
+        "action": "BUY",
+        "signal_score": 85.0,
+        "entry_price": 1000.0,
+        "stop_loss_price": 920.0,
+        "target_price": 1100.0,
+        "risk_reward_ratio": 1.25,
+        "position_size_pct": 10.0,
+        "components": {
+            "backtest_winrate": 0.75,
+            "backtest_samples": 40,
+            "tech_signals": ["均線多頭"],
+            "valuation": {"pe": 18.2, "yield": 3.5, "pb": 4.5},
+        },
+        "risk_notes": ["量能健康"],
+    }]
+
+    append_signals(signals)
+    assert len(fake_ws.rows) == 1
+    row = fake_ws.rows[0]
+    assert row[1] == "2330"
+    assert row[14] == "18.2"
+    assert row[15] == "3.50%"
+    assert row[16] == "4.50"
+

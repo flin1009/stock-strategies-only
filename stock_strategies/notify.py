@@ -186,7 +186,12 @@ def format_messages(
             tech_sigs = "/".join(c.get("tech_signals", [])) or "多頭指標"
             vp = " + ".join(c.get("volume_patterns", [])) or "量價穩健"
             chips_note = c.get("chips_summary", "")
-            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | 技術 {c.get('tech_score', 0)}分)")
+            val = c.get("valuation", {})
+            pe_val = val.get("pe")
+            pe_str = f"PE {pe_val:.1f}x" if pe_val else "PE --"
+            y_val = val.get("yield", 0.0)
+            y_str = f"殖 {y_val:.1f}%" if y_val else "殖 0%"
+            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {pe_str} · {y_str})")
             lines.append(f"  收盤 {s.get('entry_price')} ({t.get('chg_5d', 0):+.1f}% 5日) | 訊號: {tech_sigs}")
             lines.append(f"  量能: {vp}" + (f" | 籌碼: {chips_note}" if chips_note else ""))
             ep = float(s.get("entry_price") or 0)
@@ -205,7 +210,12 @@ def format_messages(
     if top_watches:
         for s in top_watches:
             c = s.get("components", {})
-            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分) — 收盤 {s.get('entry_price')}")
+            val = c.get("valuation", {})
+            pe_val = val.get("pe")
+            pe_str = f"PE {pe_val:.1f}x" if pe_val else "PE --"
+            y_val = val.get("yield", 0.0)
+            y_str = f"殖 {y_val:.1f}%" if y_val else "殖 0%"
+            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {pe_str} · {y_str}) — 收盤 {s.get('entry_price')}")
             lines.append(f"  ↳ 差在: {_explain_why(s)}")
             lines.append(f"  ↳ 參考防守價: {s['stop_loss_price']} (-8%)")
             lines.append("")
@@ -388,15 +398,35 @@ def format_message(signals: list[dict]) -> str:
     return format_messages(signals)[0]
 
 
+def _format_margin_tag(m_diff: int | None, is_sell: bool = False) -> str:
+    """格式化單檔融資增減提示標籤"""
+    if m_diff is None or m_diff == 0:
+        return ""
+    if not is_sell:
+        if m_diff < 0:
+            return f" · 融資{m_diff:,}張🔥"
+        elif m_diff >= 300:
+            return f" · 融資+{m_diff:,}張⚠️"
+        else:
+            return f" · 融資+{m_diff:,}張"
+    else:
+        if m_diff > 0:
+            return f" · 融資+{m_diff:,}張⚠️"
+        else:
+            return f" · 融資{m_diff:,}張"
+
+
 def format_chips_streak(
     buy_records: list[dict] | dict = None,
     sell_records: list[dict] = None,
     daily_buys: list[dict] = None,
 ) -> str:
     """三大法人連續買超與連賣全市場多空晚報推播格式"""
+    mkt_m_diff = None
     if isinstance(buy_records, dict) and "buy_records" in buy_records:
         daily_buys = buy_records.get("daily_buys", daily_buys)
         sell_records = buy_records.get("sell_records", [])
+        mkt_m_diff = buy_records.get("market_total_margin_diff_lots")
         buy_records = buy_records.get("buy_records", [])
     elif buy_records is None:
         buy_records = []
@@ -405,11 +435,23 @@ def format_chips_streak(
     if daily_buys is None:
         daily_buys = []
 
+    if mkt_m_diff is None:
+        try:
+            from .exchange_data import get_market_margin_map
+            mkt_m_diff = get_market_margin_map().get("market_total_margin_diff_lots")
+        except Exception:
+            pass
+
+    margin_hdr = ""
+    if mkt_m_diff is not None and mkt_m_diff != 0:
+        sentiment_tag = "浮額沉澱" if mkt_m_diff < 0 else "散戶增溫"
+        margin_hdr = f" | 融資 {mkt_m_diff:+,}張 ({sentiment_tag})"
+
     today = datetime.now()
     wd = "一二三四五六日"[today.weekday()]
     lines = [
         f"🔥 *全市場三大法人多空晚報* {today.strftime('%Y/%m/%d')} (週{wd})",
-        f"全市場 2,200+ 檔上市櫃初篩 | 連買 {len(buy_records)} 檔 | 連賣 {len(sell_records)} 檔",
+        f"全市場 2,200+ 檔上市櫃初篩 | 連買 {len(buy_records)} 檔 | 連賣 {len(sell_records)} 檔{margin_hdr}",
         "",
     ]
 
@@ -465,7 +507,8 @@ def format_chips_streak(
             ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
             streak_amt = r.get("streak_amount", 0.0)
             amt_str = f" (+{streak_amt:.1f}億)" if streak_amt > 0 else ""
-            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}")
+            m_str = _format_margin_tag(r.get("margin_diff"), is_sell=False)
+            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}")
             recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
             lines.append(
                 f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
@@ -494,7 +537,8 @@ def format_chips_streak(
             ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
             streak_amt = r.get("streak_amount", 0.0)
             amt_str = f" (+{streak_amt:.1f}億)" if streak_amt > 0 else ""
-            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}")
+            m_str = _format_margin_tag(r.get("margin_diff"), is_sell=False)
+            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}")
             recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
             lines.append(
                 f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
@@ -526,7 +570,8 @@ def format_chips_streak(
             ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
             streak_amt = r.get("streak_amount", 0.0)
             amt_str = f" ({streak_amt:.1f}億)" if streak_amt != 0 else ""
-            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}")
+            m_str = _format_margin_tag(r.get("margin_diff"), is_sell=True)
+            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}")
             recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
             lines.append(
                 f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
@@ -555,7 +600,8 @@ def format_chips_streak(
             ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
             streak_amt = r.get("streak_amount", 0.0)
             amt_str = f" ({streak_amt:.1f}億)" if streak_amt != 0 else ""
-            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}")
+            m_str = _format_margin_tag(r.get("margin_diff"), is_sell=True)
+            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}")
             recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
             lines.append(
                 f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"

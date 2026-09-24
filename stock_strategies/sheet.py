@@ -29,6 +29,15 @@ def read_watchlist() -> list[dict]:
     return enabled
 
 
+SIGNALS_HEADERS = [
+    "date", "stock_id", "name", "action", "signal_score",
+    "entry_price", "stop_loss_price", "target_price",
+    "rr_ratio", "position_pct", "winrate", "samples",
+    "tech_signals", "risk_notes",
+    "pe", "dividend_yield", "pb",
+]
+
+
 def append_signals(signals: list[dict]):
     """把結果寫回 Signals 分頁"""
     if not signals:
@@ -38,16 +47,19 @@ def append_signals(signals: list[dict]):
         ws = sh.worksheet("Signals")
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title="Signals", rows=1000, cols=20)
-        ws.append_row([
-            "date", "stock_id", "name", "action", "signal_score",
-            "entry_price", "stop_loss_price", "target_price",
-            "rr_ratio", "position_pct", "winrate", "samples",
-            "tech_signals", "risk_notes"
-        ])
+        ws.append_row(SIGNALS_HEADERS)
 
     rows = []
     for s in signals:
         c = s.get("components", {})
+        val = c.get("valuation", {})
+        pe = val.get("pe")
+        pe_str = f"{pe:.1f}" if pe is not None else ""
+        y = val.get("yield")
+        y_str = f"{y:.2f}%" if y is not None else ""
+        pb = val.get("pb")
+        pb_str = f"{pb:.2f}" if pb is not None else ""
+
         rows.append([
             s.get("date", ""),
             s.get("stock_id", ""),
@@ -63,6 +75,9 @@ def append_signals(signals: list[dict]):
             c.get("backtest_samples", ""),
             ", ".join(c.get("tech_signals", [])),
             " / ".join(s.get("risk_notes", [])),
+            pe_str,
+            y_str,
+            pb_str,
         ])
     ws.append_rows(rows)
 
@@ -207,6 +222,8 @@ CHIPS_STREAK_HEADERS = [
     "streak_total_net_lots",
     "streak_amount",
     "today_total_net_lots",
+    "margin_diff",
+    "margin_today",
     "today_close",
     "today_pct",
     "streak_pct",
@@ -233,6 +250,11 @@ def write_chips_streak(records: list[dict]):
 
     rows = []
     for r in records:
+        m_diff = r.get("margin_diff")
+        m_diff_str = f"{m_diff:+,}" if m_diff is not None else ""
+        m_today = r.get("margin_today")
+        m_today_str = f"{m_today:,}" if m_today is not None else ""
+
         rows.append([
             r.get("date", ""),
             r.get("stock_id", ""),
@@ -245,6 +267,8 @@ def write_chips_streak(records: list[dict]):
             r.get("streak_total_net_lots", 0),
             f"{r.get('streak_amount', 0.0):+.2f}億",
             r.get("today_total_net_lots", 0),
+            m_diff_str,
+            m_today_str,
             r.get("today_close", 0.0),
             f"{r.get('today_pct', 0.0):+.2f}%",
             f"{r.get('streak_pct', 0.0):+.2f}%",
@@ -272,6 +296,11 @@ def write_chips_sell_streak(records: list[dict]):
 
     rows = []
     for r in records:
+        m_diff = r.get("margin_diff")
+        m_diff_str = f"{m_diff:+,}" if m_diff is not None else ""
+        m_today = r.get("margin_today")
+        m_today_str = f"{m_today:,}" if m_today is not None else ""
+
         rows.append([
             r.get("date", ""),
             r.get("stock_id", ""),
@@ -284,6 +313,8 @@ def write_chips_sell_streak(records: list[dict]):
             r.get("streak_total_net_lots", 0),
             f"{r.get('streak_amount', 0.0):+.2f}億",
             r.get("today_total_net_lots", 0),
+            m_diff_str,
+            m_today_str,
             r.get("today_close", 0.0),
             f"{r.get('today_pct', 0.0):+.2f}%",
             f"{r.get('streak_pct', 0.0):+.2f}%",
