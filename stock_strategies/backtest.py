@@ -3,10 +3,11 @@ import pandas as pd
 
 from .config import CONFIG
 from .indicators import tech_score_at
+from .vcp import vcp_breakout_indices
 
 
 def backtest(df: pd.DataFrame, params: dict | None = None) -> dict:
-    """對歷史所有技術分達門檻的日子做持有 N 日結算。
+    """對歷史所有技術分達門檻（或 VCP 突破）的日子做持有 N 日結算。
 
     訊號日為第 i 天收盤產生，實際進場為第 i+1 天開盤（符合可執行性）。
 
@@ -15,6 +16,7 @@ def backtest(df: pd.DataFrame, params: dict | None = None) -> dict:
       - min_tech_score_for_signal
       - target_return / stop_loss
       - use_ma_alignment / use_bollinger_bounce / use_kd_golden_cross / use_macd_bullish
+      - vcp_only_signal / _index_df
     沒給就退回到舊 CONFIG。
     """
     if params is None:
@@ -24,10 +26,25 @@ def backtest(df: pd.DataFrame, params: dict | None = None) -> dict:
     target = float(params.get("target_return", CONFIG["target_return"]))
     stop = float(params.get("stop_loss", CONFIG["stop_loss"]))
 
-    indices = []
-    for i in range(60, len(df) - hold_days - 1):
-        if tech_score_at(df.iloc[i], params)["score"] >= min_score:
-            indices.append(i)
+    if params.get("vcp_only_signal"):
+        raw_indices = vcp_breakout_indices(
+            df,
+            start_idx=220,
+            end_idx=len(df) - hold_days - 1,
+            index_df=params.get("_index_df"),
+        )
+        # 10 日冷卻期，避免同波連續突破重複計數
+        indices = []
+        last_i = -999
+        for i in raw_indices:
+            if i - last_i >= 10:
+                indices.append(i)
+                last_i = i
+    else:
+        indices = []
+        for i in range(60, len(df) - hold_days - 1):
+            if tech_score_at(df.iloc[i], params)["score"] >= min_score:
+                indices.append(i)
 
     if not indices:
         return {"winrate": None, "samples": 0, "avg_return": None}

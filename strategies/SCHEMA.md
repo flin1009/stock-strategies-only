@@ -45,6 +45,8 @@
 - `use_kd_golden_cross` (bool) — KD 黃金交叉
 - `use_macd_bullish` (bool) — MACD 多頭
 - `use_volume_patterns` (bool) — 量價型態加減分
+- `use_vcp_breakout` (bool) — 啟用 VCP 波動收縮突破／蓄勢偵測加分與標籤
+- `vcp_only_signal` (bool) — 嚴格僅以 VCP 突破作為回測與 BUY 觸發條件
 
 ### 大盤濾鏡
 

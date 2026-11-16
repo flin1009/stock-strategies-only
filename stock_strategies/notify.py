@@ -195,8 +195,12 @@ def format_messages(
             lines.append(f"  收盤 {s.get('entry_price')} ({t.get('chg_5d', 0):+.1f}% 5日) | 訊號: {tech_sigs}")
             lines.append(f"  量能: {vp}" + (f" | 籌碼: {chips_note}" if chips_note else ""))
             ep = float(s.get("entry_price") or 0)
+            sp = float(s.get("stop_loss_price") or 0)
+            tp = float(s.get("target_price") or 0)
+            stop_pct = round((sp / ep - 1) * 100) if ep > 0 and sp > 0 else -8
+            tgt_pct = round((tp / ep - 1) * 100) if ep > 0 and tp > 0 else 10
             max_buy_str = f" ≤ {ep * 1.025:.1f} (開高逾+2.5%不追)" if ep > 0 else ""
-            lines.append(f"  🎯 建議進場{max_buy_str} → 損 {s['stop_loss_price']} (-8%) / 標 {s['target_price']} (+10%)")
+            lines.append(f"  🎯 建議進場{max_buy_str} → 損 {s['stop_loss_price']} ({stop_pct:+d}%) / 標 {s['target_price']} ({tgt_pct:+d}%)")
             if s.get("risk_notes"):
                 lines.append(f"  ⚠️ 提醒: {' / '.join(s['risk_notes'])}")
             lines.append("")
@@ -215,9 +219,12 @@ def format_messages(
             pe_str = f"PE {pe_val:.1f}x" if pe_val else "PE --"
             y_val = val.get("yield", 0.0)
             y_str = f"殖 {y_val:.1f}%" if y_val else "殖 0%"
+            ep = float(s.get("entry_price") or 0)
+            sp = float(s.get("stop_loss_price") or 0)
+            stop_pct = round((sp / ep - 1) * 100) if ep > 0 and sp > 0 else -8
             lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {pe_str} · {y_str}) — 收盤 {s.get('entry_price')}")
             lines.append(f"  ↳ 差在: {_explain_why(s)}")
-            lines.append(f"  ↳ 參考防守價: {s['stop_loss_price']} (-8%)")
+            lines.append(f"  ↳ 參考防守價: {s['stop_loss_price']} ({stop_pct:+d}%)")
             lines.append("")
         if rest_watches:
             rest_strs = [f"{s['stock_id']}{s['name']}({s['signal_score']})" for s in rest_watches]

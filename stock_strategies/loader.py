@@ -52,6 +52,8 @@ _PARAM_DEFAULTS: dict = {
     "use_kd_golden_cross": True,
     "use_macd_bullish": True,
     "use_volume_patterns": True,
+    "use_vcp_breakout": True,
+    "vcp_only_signal": False,
     # 大盤濾鏡
     "market_filter_enabled": True,
     "market_filter_ma_period": 20,

@@ -1,0 +1,38 @@
+{
+  "id": "vcp",
+  "name": "台股實戰 VCP 突破策略 (趨勢樣板 + 波動收縮)",
+  "description": "經近 5 年台股回測驗證改良版 VCP：Minervini Stage 2 趨勢樣板 (MA50>150>200) + 相對大盤強勢 (RS) + 彈性兩段波動收縮 + 帶量實體突破樞紐點 + 大盤 MA20 濾鏡。停損 -8% / 停利 +15%，持有 30 日。",
+  "source": "default",
+  "created_at": "2026-11-16T00:00:00Z",
+  "updated_at": "2026-11-16T00:00:00Z",
+  "params": {
+    "eps_threshold": 2.0,
+    "roe_threshold": 10.0,
+    "fundamental_pass_required": false,
+
+    "backtest_years": 3,
+    "hold_days": 30,
+    "min_tech_score_for_signal": 70,
+
+    "target_return": 0.15,
+    "stop_loss": 0.08,
+
+    "weight_chips": 0.25,
+    "weight_technical": 0.40,
+    "weight_fundamental": 0.15,
+    "weight_backtest": 0.20,
+    "min_total_score_for_buy": 70,
+    "min_tech_score_for_buy": 80,
+
+    "use_ma_alignment": true,
+    "use_bollinger_bounce": false,
+    "use_kd_golden_cross": false,
+    "use_macd_bullish": true,
+    "use_volume_patterns": true,
+    "use_vcp_breakout": true,
+    "vcp_only_signal": true,
+
+    "market_filter_enabled": true,
+    "market_filter_ma_period": 20
+  }
+}

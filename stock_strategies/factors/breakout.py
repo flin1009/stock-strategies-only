@@ -76,3 +76,24 @@ def swing_new_high(ctx, params):
     if float(c.iloc[-1]) / float(swing_high) >= 0.98:
         return 0.75                        # 距波段高 <2%
     return clip01(rank_pct(c.iloc[-m:], float(c.iloc[-1])))
+
+
+@register("breakout.vcp", "breakout", ["price_df"],
+          "台股實戰版 VCP 波動收縮突破（趨勢樣板 + 彈性收縮 + 帶量突破）", lookback_min=220)
+def vcp_breakout(ctx, params):
+    from ..vcp import detect_vcp
+    min_turnover = float(params.get("vcp_min_turnover", 30_000_000.0))
+    res = detect_vcp(
+        ctx.price_df,
+        index_df=ctx.index_df if not ctx.index_df.empty else None,
+        min_turnover=min_turnover,
+    )
+    if res["signal"] == "VCP突破":
+        return 1.0
+    if res["signal"] == "VCP蓄勢":
+        return 0.8
+    if res["trend_ok"] and res["contract_ok"] and res["rs_ok"]:
+        return 0.65
+    if res["trend_ok"]:
+        return 0.55
+    return 0.35

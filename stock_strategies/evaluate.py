@@ -5,11 +5,12 @@ import pandas as pd
 
 from .config import CONFIG
 from .data import get_fundamental, get_price_history
-from .datasources import get_institutional
+from .datasources import get_institutional, get_index_history
 from .exchange_data import get_market_valuation_map
 from .indicators import add_indicators, tech_score_at
 from .backtest import backtest
 from .volume import detect_patterns, verdict as volume_verdict
+from .vcp import detect_vcp
 from .loader import merge_params
 
 
@@ -45,12 +46,30 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
         px = add_indicators(px)
         latest = px.iloc[-1]
         ts = tech_score_at(latest, params)
-        bt = backtest(px, params)
+
+        index_df = pd.DataFrame()
+        if params.get("use_vcp_breakout", True) or params.get("vcp_only_signal"):
+            try:
+                index_df = get_index_history("TAIEX")
+            except Exception:
+                index_df = pd.DataFrame()
+
+        bt_params = dict(params)
+        if not index_df.empty:
+            bt_params["_index_df"] = index_df
+        bt = backtest(px, bt_params)
 
         if params["use_volume_patterns"]:
             vp = detect_patterns(px)
         else:
             vp = {"patterns": [], "bonus": 0, "details": {}}
+
+        if params.get("use_vcp_breakout", True):
+            vcp_info = detect_vcp(px, index_df=index_df if not index_df.empty else None)
+            if vcp_info.get("signal"):
+                ts["signals"] = list(ts["signals"]) + [vcp_info["signal"]]
+        else:
+            vcp_info = {"signal": None, "bonus": 0}
 
         # 1. 基本面評分 (結合財報 EPS/ROE 與 證交所/櫃買 官方即時 PE/殖利率快照)
         min_eps = min(eps_vals) if eps_vals else 0.0
@@ -86,8 +105,17 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
 
         fund_score = round(min(100.0, max(0.0, fund_score)), 1)
 
-        # 2. 技術面評分
-        tech_score = max(0, min(100, ts["score"] + vp["bonus"]))
+        # 2. 技術面評分 (含 VCP 加分；若為純 VCP 策略則嚴格門控 BUY)
+        vcp_sig = vcp_info.get("signal")
+        if params.get("vcp_only_signal"):
+            if vcp_sig == "VCP突破":
+                tech_score = max(85, min(100, ts["score"] + vp["bonus"] + vcp_info.get("bonus", 0)))
+            elif vcp_sig == "VCP蓄勢":
+                tech_score = min(max(0, params["min_tech_score_for_buy"] - 1), max(65, ts["score"] + vp["bonus"]))
+            else:
+                tech_score = min(max(0, params["min_tech_score_for_buy"] - 10), max(0, ts["score"] + vp["bonus"]))
+        else:
+            tech_score = max(0, min(100, ts["score"] + vp["bonus"] + vcp_info.get("bonus", 0)))
 
         # 3. 回測評分（貝氏平滑：以 10 筆 50% 基準平滑極端值）
         samples = bt.get("samples", 0)
@@ -216,6 +244,7 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
                 "volume_details": vp["details"],
                 "volume_bonus": vp["bonus"],
                 "volume_verdict": volume_verdict(vp["patterns"]),
+                "vcp": vcp_info,
                 "valuation": {
                     "pe": pe_val,
                     "yield": yield_val,

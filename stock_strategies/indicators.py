@@ -7,7 +7,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     df["ma5"] = df["close"].rolling(5).mean()
     df["ma20"] = df["close"].rolling(20).mean()
+    df["ma50"] = df["close"].rolling(50).mean()
     df["ma60"] = df["close"].rolling(60).mean()
+    df["ma150"] = df["close"].rolling(150).mean()
+    df["ma200"] = df["close"].rolling(200).mean()
 
     df["bb_mid"] = df["close"].rolling(20).mean()
     bb_std = df["close"].rolling(20).std()
