@@ -10,7 +10,12 @@ from typing import Optional
 
 import pandas as pd
 
-from .exchange_data import get_market_streak_candidates, get_market_margin_map
+from .cache import FinMindRateLimitError
+from .exchange_data import (
+    get_market_streak_candidates,
+    get_market_margin_map,
+    get_market_daily_price_map,
+)
 from .data import get_price_history
 from .datasources import get_index_history
 from .vcp import detect_vcp
@@ -48,22 +53,69 @@ def enrich_candidate_price(
     candidate: dict,
     index_df: Optional[pd.DataFrame] = None,
     check_vcp: bool = True,
+    margin_stocks: Optional[dict] = None,
+    daily_price_map: Optional[dict] = None,
+    finmind_state: Optional[dict] = None,
+    use_finmind: bool = True,
 ) -> dict:
     """為篩選出的連買/連賣個股補上最新收盤價、今日漲跌幅、連買/賣期間累計漲幅與 VCP 偵測。"""
     sid = str(candidate["stock_id"])
+    price_df = pd.DataFrame()
+    if use_finmind and not (finmind_state and finmind_state.get("rate_limited")):
+        try:
+            price_df = get_price_history(sid, years=1)
+        except FinMindRateLimitError:
+            if finmind_state is not None and not finmind_state.get("rate_limited"):
+                finmind_state["rate_limited"] = True
+                print("⚠️ FinMind 達請求上限，後續標的改用證交所/櫃買免費當日快照補齊")
+            price_df = pd.DataFrame()
+        except Exception:
+            price_df = pd.DataFrame()
+
+    # 融入融資增減資訊（優先使用預先載入的快照）
+    margin_diff = None
+    margin_today = None
     try:
-        price_df = get_price_history(sid, years=1)
+        m_map = margin_stocks if margin_stocks is not None else get_market_margin_map().get("stocks", {})
+        if sid in m_map:
+            margin_diff = m_map[sid].get("margin_diff")
+            margin_today = m_map[sid].get("margin_today")
     except Exception:
-        price_df = pd.DataFrame()
+        pass
+
+    lots = candidate.get("streak_total_net_lots", 0)
 
     if price_df.empty or "close" not in price_df.columns or len(price_df) < 2:
+        # Fallback：使用證交所/櫃買免費當日收盤與漲跌幅快照（0 FinMind 額度）
+        snap = (daily_price_map or {}).get(sid)
+        if snap and snap.get("close", 0) > 0:
+            today_close = float(snap["close"])
+            today_pct = float(snap.get("pct", 0.0))
+            streak_amount = round((lots * today_close * 1000) / 1e8, 2)
+            candidate.update({
+                "today_close": today_close,
+                "today_pct": today_pct,
+                "streak_pct": today_pct,
+                "streak_amount": streak_amount,
+                "margin_diff": margin_diff,
+                "margin_today": margin_today,
+                "vcp_signal": None,
+                "vcp_detail": "",
+                "vcp_pivot": None,
+                "recent_daily_pcts": [f"{today_pct:+.1f}%"],
+            })
+            return candidate
+
         candidate.update({
             "today_close": 0.0,
             "today_pct": 0.0,
             "streak_pct": 0.0,
             "streak_amount": 0.0,
-            "margin_diff": None,
-            "margin_today": None,
+            "margin_diff": margin_diff,
+            "margin_today": margin_today,
+            "vcp_signal": None,
+            "vcp_detail": "",
+            "vcp_pivot": None,
             "recent_daily_pcts": [],
         })
         return candidate
@@ -84,19 +136,7 @@ def enrich_candidate_price(
     streak_pct = round(((today_close - base_close) / base_close) * 100, 2) if base_close > 0 else 0.0
 
     # 累計買/賣超金額（億元）= 張數 * 1000股 * 今日收盤價 / 1億
-    lots = candidate.get("streak_total_net_lots", 0)
     streak_amount = round((lots * today_close * 1000) / 1e8, 2) if today_close > 0 else 0.0
-
-    # 融入融資增減資訊
-    margin_diff = None
-    margin_today = None
-    try:
-        m_map = get_market_margin_map().get("stocks", {})
-        if sid in m_map:
-            margin_diff = m_map[sid].get("margin_diff")
-            margin_today = m_map[sid].get("margin_today")
-    except Exception:
-        pass
 
     recent_slice = price_df.tail(max(3, min(streak_len, 5)))
     recent_daily_pcts = [
@@ -144,6 +184,9 @@ def _process_pool(
     max_market_candidates: int,
     is_sell: bool = False,
     delay_sec: float = 0.03,
+    margin_stocks: Optional[dict] = None,
+    daily_price_map: Optional[dict] = None,
+    finmind_state: Optional[dict] = None,
 ) -> list[dict]:
     """處理單一方向 (買或賣) 的候選清單：交叉比對自選股、排序與補充股價。"""
     wl_pool = []
@@ -178,7 +221,7 @@ def _process_pool(
     combined = wl_pool + selected_market
 
     index_df = None
-    if not is_sell:
+    if not is_sell and not (finmind_state and finmind_state.get("rate_limited")):
         try:
             idx_df = get_index_history("TAIEX")
             if not idx_df.empty:
@@ -186,13 +229,31 @@ def _process_pool(
         except Exception:
             index_df = None
 
+    # 買方自選+前30強才拉 FinMind 完整日K（算 VCP+5日），賣方自選+前10強拉 FinMind；其餘改用免費當日快照省額度
+    finmind_mkt_cap = 10 if is_sell else 30
+
     enriched = []
+    mkt_seen = 0
     for item in combined:
+        is_wl = bool(item.get("is_watchlist"))
+        if not is_wl:
+            mkt_seen += 1
+        allow_finmind = is_wl or (mkt_seen <= finmind_mkt_cap)
         try:
-            enriched.append(enrich_candidate_price(item, index_df=index_df, check_vcp=not is_sell))
+            enriched.append(
+                enrich_candidate_price(
+                    item,
+                    index_df=index_df,
+                    check_vcp=not is_sell,
+                    margin_stocks=margin_stocks,
+                    daily_price_map=daily_price_map,
+                    finmind_state=finmind_state,
+                    use_finmind=allow_finmind,
+                )
+            )
         except TypeError:
             enriched.append(enrich_candidate_price(item))
-        if delay_sec > 0:
+        if delay_sec > 0 and allow_finmind and not (finmind_state and finmind_state.get("rate_limited")):
             time.sleep(delay_sec)
 
     if is_sell:
@@ -250,19 +311,36 @@ def scan_market_chips_streak(
                 if w.get("name"):
                     watchlist_names[sid] = str(w.get("name"))
 
+    try:
+        margin_res = get_market_margin_map()
+    except Exception:
+        margin_res = {}
+    margin_stocks = margin_res.get("stocks", {})
+    mkt_margin_diff = margin_res.get("market_total_margin_diff_lots")
+
+    try:
+        daily_price_map = get_market_daily_price_map()
+    except Exception:
+        daily_price_map = {}
+
+    finmind_state = {"rate_limited": False}
+
     enriched_buys = _process_pool(
         buy_candidates, watchlist_sids, watchlist_names, latest_date,
         max_market_candidates, is_sell=False, delay_sec=delay_sec,
+        margin_stocks=margin_stocks, daily_price_map=daily_price_map, finmind_state=finmind_state,
     )
     enriched_sells = _process_pool(
         sell_candidates, watchlist_sids, watchlist_names, latest_date,
         max_market_candidates, is_sell=True, delay_sec=delay_sec,
+        margin_stocks=margin_stocks, daily_price_map=daily_price_map, finmind_state=finmind_state,
     )
 
     return ChipsScanResult({
         "trading_days": trading_days,
         "buy_records": enriched_buys,
         "sell_records": enriched_sells,
+        "market_total_margin_diff_lots": mkt_margin_diff,
     })
 
 

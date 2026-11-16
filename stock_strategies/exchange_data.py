@@ -267,6 +267,71 @@ def get_market_margin_map(force_refresh: bool = False, timeout: int = 15) -> dic
     return result
 
 
+def get_market_daily_price_map(force_refresh: bool = False, timeout: int = 15) -> dict[str, dict]:
+    """取得全市場 (TWSE + TPEx) 當日收盤價與漲跌幅快照（0 FinMind 額度）。
+    快取於 .cache/exchange/market_daily_prices.json，有效天數 16 小時。
+    回傳 dict: {stock_id: {"close": float, "pct": float}}
+    """
+    _ensure_cache_dir()
+    cache_file = EXCHANGE_CACHE_DIR / "market_daily_prices.json"
+    if not force_refresh and cache_file.exists():
+        try:
+            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            if datetime.now() - mtime < timedelta(hours=16):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
+    price_map: dict[str, dict] = {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    # 1. TWSE 上市每日收盤 (STOCK_DAY_ALL)
+    try:
+        r = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", headers=headers, timeout=timeout)
+        if r.ok:
+            for item in r.json():
+                sid = str(item.get("Code", "")).strip()
+                c = _parse_float(item.get("ClosingPrice"))
+                if sid and c is not None and c > 0:
+                    chg = _parse_float(item.get("Change")) or 0.0
+                    prev = c - chg
+                    pct = round((chg / prev) * 100, 2) if prev > 0 else 0.0
+                    price_map[sid] = {"close": c, "pct": pct}
+    except Exception as e:
+        print(f"[TWSE] 抓取當日行情快照失敗: {e}")
+
+    # 2. TPEx 上櫃每日收盤 (tpex_mainboard_quotes)
+    try:
+        r = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes", headers=headers, timeout=timeout)
+        if r.ok:
+            for item in r.json():
+                sid = str(item.get("SecuritiesCompanyCode", "")).strip()
+                c = _parse_float(item.get("Close"))
+                if sid and c is not None and c > 0:
+                    chg = _parse_float(item.get("Change")) or 0.0
+                    prev = c - chg
+                    pct = round((chg / prev) * 100, 2) if prev > 0 else 0.0
+                    price_map[sid] = {"close": c, "pct": pct}
+    except Exception as e:
+        print(f"[TPEx] 抓取當日行情快照失敗: {e}")
+
+    if price_map:
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(price_map, f, ensure_ascii=False)
+        except Exception:
+            pass
+    elif cache_file.exists():
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    return price_map
+
+
 def fetch_twse_t86(date_str: str, timeout: int = 15) -> pd.DataFrame:
     """抓取指定日期 (YYYYMMDD) 證交所上市股票三大法人買賣超 (T86)。
 

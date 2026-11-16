@@ -114,6 +114,18 @@ def test_scan_market_chips_streak(monkeypatch):
         "stock_strategies.chips_scanner.enrich_candidate_price",
         lambda c: {**c, "today_close": 100.0, "today_pct": 1.0, "streak_pct": 3.0, "recent_daily_pcts": ["+1.0%"]},
     )
+    monkeypatch.setattr(
+        "stock_strategies.chips_scanner.get_market_margin_map",
+        lambda: {"stocks": {}, "market_total_margin_diff_lots": 0},
+    )
+    monkeypatch.setattr(
+        "stock_strategies.chips_scanner.get_market_daily_price_map",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        "stock_strategies.chips_scanner.get_index_history",
+        lambda *a, **kw: pd.DataFrame(),
+    )
 
     watchlist = [{"stock_id": "2330", "name": "台積電"}]
     res = scan_market_chips_streak(watchlist=watchlist, min_streak=3, delay_sec=0)
@@ -821,4 +833,68 @@ def test_format_messages_splits_when_many_buys():
     # 確認不會把同一檔股票的卡片從中間切斷
     for m in msgs:
         assert m.count("• *23") == m.count("🎯 建議進場")
+
+
+def test_get_market_daily_price_map(monkeypatch, tmp_path):
+    from stock_strategies import exchange_data
+    monkeypatch.setattr(exchange_data, "EXCHANGE_CACHE_DIR", tmp_path)
+
+    twse_quotes = [{"Code": "2330", "ClosingPrice": "102.0", "Change": "2.0"}]
+    tpex_quotes = [{"SecuritiesCompanyCode": "8069", "Close": "210.0", "Change": "+10.0"}]
+
+    class FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self.ok = True
+        def json(self):
+            return self._data
+
+    def fake_get(url, *args, **kwargs):
+        if "STOCK_DAY_ALL" in url:
+            return FakeResp(twse_quotes)
+        return FakeResp(tpex_quotes)
+
+    monkeypatch.setattr("requests.get", fake_get)
+    pmap = exchange_data.get_market_daily_price_map(force_refresh=True)
+    assert pmap["2330"] == {"close": 102.0, "pct": 2.0}
+    assert pmap["8069"] == {"close": 210.0, "pct": 5.0}
+
+
+def test_chips_scanner_finmind_rate_limit_fallback(monkeypatch):
+    from stock_strategies.cache import FinMindRateLimitError
+    from stock_strategies.chips_scanner import enrich_candidate_price
+
+    calls = {"n": 0}
+
+    def boom(sid, years=1):
+        calls["n"] += 1
+        raise FinMindRateLimitError("402")
+
+    monkeypatch.setattr("stock_strategies.chips_scanner.get_price_history", boom)
+
+    finmind_state = {"rate_limited": False}
+    daily_map = {
+        "2330": {"close": 1000.0, "pct": 2.5},
+        "2454": {"close": 1400.0, "pct": -1.0},
+    }
+    margin_stocks = {"2330": {"margin_diff": -100, "margin_today": 5000}}
+
+    c1 = {"stock_id": "2330", "main_streak": 3, "streak_total_net_lots": 2000}
+    c2 = {"stock_id": "2454", "main_streak": 3, "streak_total_net_lots": 1000}
+
+    r1 = enrich_candidate_price(
+        c1, margin_stocks=margin_stocks, daily_price_map=daily_map, finmind_state=finmind_state
+    )
+    r2 = enrich_candidate_price(
+        c2, margin_stocks=margin_stocks, daily_price_map=daily_map, finmind_state=finmind_state
+    )
+
+    assert finmind_state["rate_limited"] is True
+    assert calls["n"] == 1  # 第 2 檔不再打 FinMind（熔斷直接走快照）
+    assert r1["today_close"] == 1000.0
+    assert r1["today_pct"] == 2.5
+    assert r1["streak_amount"] == 20.0
+    assert r1["margin_diff"] == -100
+    assert r2["today_close"] == 1400.0
+    assert r2["streak_amount"] == 14.0
 

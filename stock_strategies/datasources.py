@@ -228,7 +228,7 @@ def get_index_history(index_id: str = "TAIEX", start: str | None = None,
         try:
             df = fetch_finmind_cached("TaiwanStockPrice", did, start, end_date=as_of)
         except FinMindRateLimitError:
-            continue
+            break
         if df.empty:
             continue
         df = df.rename(columns={"max": "high", "min": "low"})
