@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from datetime import datetime
 
 import numpy as np
@@ -8,15 +9,10 @@ import requests
 from .config import CONFIG, TELEGRAM_API
 
 
-def _split_telegram_chunks(text: str, limit: int = 3950) -> list[str]:
-    """將超過 Telegram 單則上限 (4096 字元) 的訊息依段落/換行安全分段。"""
-    if len(text) <= limit:
-        return [text]
-
+def _split_lines_by_limit(text: str, limit: int) -> list[str]:
     chunks: list[str] = []
     cur_lines: list[str] = []
     cur_len = 0
-
     for line in text.split("\n"):
         add_len = len(line) + (1 if cur_lines else 0)
         if cur_lines and cur_len + add_len > limit:
@@ -33,9 +29,34 @@ def _split_telegram_chunks(text: str, limit: int = 3950) -> list[str]:
         else:
             cur_lines.append(line)
             cur_len += add_len
-
     if cur_lines:
         chunks.append("\n".join(cur_lines))
+    return chunks
+
+
+def _split_telegram_chunks(text: str, limit: int = 3950) -> list[str]:
+    """將超過 Telegram 單則上限 (4096 字元) 的訊息優先依段落空行 (\\n\\n) 安全分段。"""
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    cur_paras: list[str] = []
+    cur_len = 0
+
+    for para in text.split("\n\n"):
+        add_len = len(para) + (2 if cur_paras else 0)
+        if cur_paras and cur_len + add_len > limit:
+            chunks.append("\n\n".join(cur_paras))
+            cur_paras = []
+            cur_len = 0
+        if len(para) > limit:
+            chunks.extend(_split_lines_by_limit(para, limit))
+        else:
+            cur_paras.append(para)
+            cur_len += len(para) + (2 if len(cur_paras) > 1 else 0)
+
+    if cur_paras:
+        chunks.append("\n\n".join(cur_paras))
     return chunks
 
 
@@ -64,8 +85,10 @@ def send_telegram(text: str):
     url = TELEGRAM_API.format(token=os.environ["TELEGRAM_BOT_TOKEN"])
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
     chunks = _split_telegram_chunks(text, limit=3950)
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks):
         _post_telegram_chunk(url, chat_id, chunk)
+        if idx + 1 < len(chunks):
+            time.sleep(0.3)
 
 
 
@@ -310,7 +333,7 @@ def format_messages(
     lines.append("💡 _完整評分、歷史回測與個股指標已同步寫入 Google Sheet Signals 分頁_")
 
     full_text = "\n".join(lines)
-    return [full_text]
+    return _split_telegram_chunks(full_text)
 
 
 def _format_deep_analysis(signals: list[dict], today: str) -> str:

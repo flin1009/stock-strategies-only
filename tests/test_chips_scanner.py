@@ -790,3 +790,35 @@ def test_format_chips_streak_collapses_long_watchlist():
     assert "其餘自選連買 (3 檔)" in msg
     assert "2305股5(連4 +5.0億)" in msg
 
+
+def test_format_messages_splits_when_many_buys():
+    from stock_strategies.notify import format_messages
+
+    signals = [
+        {
+            "stock_id": f"23{i:02d}",
+            "name": f"測試股{i}",
+            "action": "BUY",
+            "signal_score": 85.0,
+            "entry_price": 100.0,
+            "stop_loss_price": 92.0,
+            "target_price": 115.0,
+            "components": {
+                "tech_score": 85,
+                "tech_signals": ["均線多頭", "MACD多頭", "VCP突破"],
+                "volume_patterns": ["倍量柱"],
+                "chips_summary": "土洋同買(投信連3/外資連3)",
+                "valuation": {"pe": 15.0, "yield": 4.0, "pb": 2.0},
+            },
+            "trend": {"chg_5d": 3.5},
+            "risk_notes": ["量能放大注意追高風險測試文字"],
+        }
+        for i in range(25)
+    ]
+    msgs = format_messages(signals)
+    assert len(msgs) >= 2
+    assert all(len(m) <= 3950 for m in msgs)
+    # 確認不會把同一檔股票的卡片從中間切斷
+    for m in msgs:
+        assert m.count("• *23") == m.count("🎯 建議進場")
+
