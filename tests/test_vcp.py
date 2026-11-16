@@ -224,3 +224,43 @@ def test_format_messages_dynamic_stop_target_pct():
     }]
     wmsg = format_messages(watch_signals)[0]
     assert "🎯VCP蓄勢" in wmsg
+
+
+def test_explain_why_market_downgrade():
+    from stock_strategies.notify import _explain_why
+
+    s = {
+        "signal_score": 81.6,
+        "components": {"fundamental_pass": True, "tech_score": 80},
+        "risk_notes": ["大盤跌破月線，自動降為 WATCH"],
+    }
+    assert _explain_why(s) == "大盤跌破月線降級（個股條件已達標）"
+
+    s_night = {
+        "signal_score": 80.0,
+        "components": {"fundamental_pass": True, "tech_score": 75},
+        "risk_notes": ["昨晚夜盤大跌 -2.0%，自動降為 WATCH"],
+    }
+    assert _explain_why(s_night) == "昨晚夜盤大跌降級（個股條件已達標）"
+
+
+def test_chips_scanner_enrich_vcp_and_format(monkeypatch):
+    from stock_strategies.chips_scanner import enrich_candidate_price
+    from stock_strategies.notify import format_chips_streak
+
+    df = _make_vcp_df(breakout=True, solid_bar=True)
+    monkeypatch.setattr("stock_strategies.chips_scanner.get_price_history", lambda sid, years=1: df)
+    monkeypatch.setattr("stock_strategies.chips_scanner.get_market_margin_map", lambda: {"stocks": {}, "market_total_margin_diff_lots": 0})
+
+    cand = {"stock_id": "2330", "name": "台積電", "main_streak": 4, "streak_total_net_lots": 5000, "tags": ["土洋同買"]}
+    enriched = enrich_candidate_price(cand, check_vcp=True)
+    assert enriched["vcp_signal"] == "VCP突破"
+    assert "VCP突破" in enriched["tags"]
+    assert enriched["vcp_pivot"] == 115.0
+
+    msg = format_chips_streak({"buy_records": [enriched], "sell_records": []})
+    assert "⚡ *【法人連買 × VCP 起漲雷達】* (1 檔)" in msg
+    assert "🎯 *2330 台積電* (VCP突破 | 連買 4 天" in msg
+
+    msg_empty = format_chips_streak({"buy_records": [{"stock_id": "2002", "name": "中鋼", "main_streak": 3, "streak_total_net_lots": 100, "today_close": 20.0, "today_pct": 0.5, "streak_pct": 1.0}], "sell_records": []})
+    assert "VCP 起漲雷達" not in msg_empty

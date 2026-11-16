@@ -90,6 +90,14 @@ def _explain_why(s: dict) -> str:
     if s.get("signal_score", 0) < 65:
         reasons.append(f"綜合分{s.get('signal_score', 0)}(<65)")
     if not reasons:
+        notes = " ".join(s.get("risk_notes", []))
+        downgrades = []
+        if "大盤跌破月線" in notes:
+            downgrades.append("大盤跌破月線")
+        if "夜盤大跌" in notes:
+            downgrades.append("昨晚夜盤大跌")
+        if downgrades:
+            return f"{'、'.join(downgrades)}降級（個股條件已達標）"
         return "所有條件皆達標"
     return " / ".join(reasons)
 
@@ -492,6 +500,32 @@ def format_chips_streak(
             lines.append("🎯 *【今日選股 × 籌碼覆核】*")
             lines.extend(cross_items)
             lines.append("")
+
+    # === ⚡ 【法人連買 × VCP 起漲雷達】（全市場 TOP 60 掃描，僅命中時顯示） ===
+    vcp_hits = [
+        r for r in buy_records
+        if r.get("vcp_signal") in ("VCP突破", "VCP蓄勢")
+        or any(t in ("VCP突破", "VCP蓄勢") for t in (r.get("tags") or []))
+    ]
+    if vcp_hits:
+        vcp_hits.sort(
+            key=lambda r: (
+                0 if (r.get("vcp_signal") == "VCP突破" or "VCP突破" in (r.get("tags") or [])) else 1,
+                -r.get("streak_amount", 0.0),
+            )
+        )
+        lines.append(f"⚡ *【法人連買 × VCP 起漲雷達】* ({len(vcp_hits)} 檔)")
+        for r in vcp_hits[:8]:
+            sig_label = r.get("vcp_signal") or (
+                "VCP突破" if "VCP突破" in (r.get("tags") or []) else "VCP蓄勢"
+            )
+            amt = r.get("streak_amount", 0.0)
+            amt_str = f" +{amt:.1f}億" if amt > 0 else ""
+            detail_str = f" — {r['vcp_detail']}" if r.get("vcp_detail") else ""
+            lines.append(
+                f"• 🎯 *{r['stock_id']} {r['name']}* ({sig_label} | 連買 {r.get('main_streak', 0)} 天{amt_str}){detail_str}"
+            )
+        lines.append("")
 
     # === 🟢 【多方 — 法人連買強勢】 ===
     lines.append("🟢 *【多方 — 法人連買強勢】*")

@@ -12,6 +12,8 @@ import pandas as pd
 
 from .exchange_data import get_market_streak_candidates, get_market_margin_map
 from .data import get_price_history
+from .datasources import get_index_history
+from .vcp import detect_vcp
 
 
 class ChipsScanResult(dict):
@@ -42,8 +44,12 @@ def calculate_streak(series: list[float] | pd.Series) -> int:
     return streak
 
 
-def enrich_candidate_price(candidate: dict) -> dict:
-    """為篩選出的連買/連賣個股補上最新收盤價、今日漲跌幅、連買/賣期間累計漲幅與近日漲幅序列。"""
+def enrich_candidate_price(
+    candidate: dict,
+    index_df: Optional[pd.DataFrame] = None,
+    check_vcp: bool = True,
+) -> dict:
+    """為篩選出的連買/連賣個股補上最新收盤價、今日漲跌幅、連買/賣期間累計漲幅與 VCP 偵測。"""
     sid = str(candidate["stock_id"])
     try:
         price_df = get_price_history(sid, years=1)
@@ -98,6 +104,23 @@ def enrich_candidate_price(candidate: dict) -> dict:
         for _, r in recent_slice.iterrows()
     ]
 
+    vcp_signal = None
+    vcp_detail = ""
+    vcp_pivot = None
+    if check_vcp and len(price_df) >= 220:
+        try:
+            vcp_res = detect_vcp(price_df, index_df=index_df)
+            vcp_signal = vcp_res.get("signal")
+            vcp_detail = vcp_res.get("detail", "")
+            vcp_pivot = vcp_res.get("pivot")
+            if vcp_signal:
+                tags = list(candidate.get("tags") or [])
+                if vcp_signal not in tags:
+                    tags.append(vcp_signal)
+                candidate["tags"] = tags
+        except Exception:
+            pass
+
     candidate.update({
         "today_close": today_close,
         "today_pct": today_pct,
@@ -105,6 +128,9 @@ def enrich_candidate_price(candidate: dict) -> dict:
         "streak_amount": streak_amount,
         "margin_diff": margin_diff,
         "margin_today": margin_today,
+        "vcp_signal": vcp_signal,
+        "vcp_detail": vcp_detail,
+        "vcp_pivot": vcp_pivot,
         "recent_daily_pcts": recent_daily_pcts,
     })
     return candidate
@@ -151,9 +177,21 @@ def _process_pool(
     selected_market = mkt_pool[:max_market_candidates]
     combined = wl_pool + selected_market
 
+    index_df = None
+    if not is_sell:
+        try:
+            idx_df = get_index_history("TAIEX")
+            if not idx_df.empty:
+                index_df = idx_df
+        except Exception:
+            index_df = None
+
     enriched = []
     for item in combined:
-        enriched.append(enrich_candidate_price(item))
+        try:
+            enriched.append(enrich_candidate_price(item, index_df=index_df, check_vcp=not is_sell))
+        except TypeError:
+            enriched.append(enrich_candidate_price(item))
         if delay_sec > 0:
             time.sleep(delay_sec)
 
