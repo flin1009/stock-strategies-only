@@ -332,6 +332,150 @@ def get_market_daily_price_map(force_refresh: bool = False, timeout: int = 15) -
     return price_map
 
 
+def fetch_twse_prices(date_str: str, timeout: int = 15) -> pd.DataFrame:
+    """抓取指定日期 (YYYYMMDD) 證交所上市個股每日收盤價與漲跌幅（0 FinMind 額度）。"""
+    d_compact = date_str.replace("-", "")
+    url = f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={d_compact}&type=ALLBUT0999&response=json"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        r = requests.get(url, headers=headers, timeout=timeout)
+        if not r.ok:
+            return pd.DataFrame()
+        d = r.json()
+        if d.get("stat") != "OK":
+            return pd.DataFrame()
+
+        target_table = None
+        for t in d.get("tables", []):
+            if "每日收盤行情" in t.get("title", "") and t.get("data"):
+                target_table = t
+                break
+        if not target_table:
+            return pd.DataFrame()
+
+        formatted_date = f"{d_compact[:4]}-{d_compact[4:6]}-{d_compact[6:]}"
+        rows = []
+        for item in target_table["data"]:
+            if len(item) < 11:
+                continue
+            sid = str(item[0]).strip()
+            if len(sid) > 5 and not sid.startswith("00"):
+                continue
+            close = _parse_float(item[8])
+            if close is None or close <= 0:
+                continue
+            sign_html = str(item[9])
+            diff_val = _parse_float(item[10]) or 0.0
+            if "-" in sign_html:
+                chg = -abs(diff_val)
+            elif "+" in sign_html:
+                chg = abs(diff_val)
+            else:
+                chg = 0.0
+            prev_close = close - chg
+            pct = round((chg / prev_close) * 100, 2) if prev_close > 0 else 0.0
+            rows.append({
+                "date": formatted_date,
+                "stock_id": sid,
+                "close": close,
+                "change": chg,
+                "prev_close": prev_close,
+                "pct": pct,
+            })
+        return pd.DataFrame(rows)
+    except Exception as e:
+        print(f"[TWSE] 抓取 {d_compact} 行情失敗: {e}")
+        return pd.DataFrame()
+
+
+def fetch_tpex_prices(date_str: str, timeout: int = 15) -> pd.DataFrame:
+    """抓取指定日期 (YYYYMMDD) 櫃買中心上櫃個股每日收盤價與漲跌幅（0 FinMind 額度）。"""
+    d_compact = date_str.replace("-", "")
+    formatted_slash = f"{d_compact[:4]}/{d_compact[4:6]}/{d_compact[6:]}"
+    formatted_date = f"{d_compact[:4]}-{d_compact[4:6]}-{d_compact[6:]}"
+    url = f"https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes?date={formatted_slash}&response=json"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        r = requests.get(url, headers=headers, timeout=timeout)
+        if not r.ok:
+            return pd.DataFrame()
+        d = r.json()
+        tables = d.get("tables", [])
+        if not tables or "data" not in tables[0]:
+            return pd.DataFrame()
+
+        rows = []
+        for item in tables[0]["data"]:
+            if len(item) < 4:
+                continue
+            sid = str(item[0]).strip()
+            if len(sid) > 5 and not sid.startswith("00"):
+                continue
+            close = _parse_float(item[2])
+            if close is None or close <= 0:
+                continue
+            chg = _parse_float(item[3]) or 0.0
+            prev_close = close - chg
+            pct = round((chg / prev_close) * 100, 2) if prev_close > 0 else 0.0
+            rows.append({
+                "date": formatted_date,
+                "stock_id": sid,
+                "close": close,
+                "change": chg,
+                "prev_close": prev_close,
+                "pct": pct,
+            })
+        return pd.DataFrame(rows)
+    except Exception as e:
+        print(f"[TPEx] 抓取 {d_compact} 行情失敗: {e}")
+        return pd.DataFrame()
+
+
+def get_market_prices_day(date_str: str) -> pd.DataFrame:
+    """取得指定日期的全市場 (上市 + 上櫃) 個股收盤價與漲跌幅，具備本地 Parquet 快取。"""
+    d_compact = date_str.replace("-", "")
+    cache_dir = _ensure_cache_dir()
+    cache_file = cache_dir / f"prices_{d_compact}.parquet"
+    if cache_file.exists():
+        try:
+            return pd.read_parquet(cache_file)
+        except Exception:
+            pass
+
+    twse_df = fetch_twse_prices(d_compact)
+    tpex_df = fetch_tpex_prices(d_compact)
+    if twse_df.empty and tpex_df.empty:
+        return pd.DataFrame()
+
+    combined = pd.concat([twse_df, tpex_df], ignore_index=True)
+    if not combined.empty:
+        try:
+            combined.to_parquet(cache_file, index=False)
+        except Exception:
+            pass
+    return combined
+
+
+def get_market_recent_prices_map(trading_days: list[str]) -> dict[str, list[dict]]:
+    """取得最近數個交易日（由舊到新）全市場個股每日收盤/漲跌幅序列（0 FinMind 額度）。
+
+    回傳 dict: {stock_id: [{"date": ..., "close": ..., "prev_close": ..., "pct": ...}, ...]}
+    """
+    by_stock: dict[str, list[dict]] = {}
+    for d in sorted(trading_days):
+        df = get_market_prices_day(d)
+        if df.empty:
+            continue
+        for row in df.itertuples(index=False):
+            by_stock.setdefault(str(row.stock_id), []).append({
+                "date": row.date,
+                "close": float(row.close),
+                "prev_close": float(row.prev_close),
+                "pct": float(row.pct),
+            })
+    return by_stock
+
+
 def fetch_twse_t86(date_str: str, timeout: int = 15) -> pd.DataFrame:
     """抓取指定日期 (YYYYMMDD) 證交所上市股票三大法人買賣超 (T86)。
 

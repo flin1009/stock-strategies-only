@@ -123,6 +123,10 @@ def test_scan_market_chips_streak(monkeypatch):
         lambda: {},
     )
     monkeypatch.setattr(
+        "stock_strategies.chips_scanner.get_market_recent_prices_map",
+        lambda days: {},
+    )
+    monkeypatch.setattr(
         "stock_strategies.chips_scanner.get_index_history",
         lambda *a, **kw: pd.DataFrame(),
     )
@@ -897,4 +901,79 @@ def test_chips_scanner_finmind_rate_limit_fallback(monkeypatch):
     assert r1["margin_diff"] == -100
     assert r2["today_close"] == 1400.0
     assert r2["streak_amount"] == 14.0
+
+
+def test_twse_tpex_recent_prices_primary_mode(monkeypatch, tmp_path):
+    from stock_strategies import exchange_data
+    from stock_strategies.chips_scanner import enrich_candidate_price
+
+    monkeypatch.setattr(exchange_data, "EXCHANGE_CACHE_DIR", tmp_path)
+
+    twse_payload = {
+        "stat": "OK",
+        "tables": [{
+            "title": "115年11月13日 每日收盤行情(全部)",
+            "data": [
+                ["2330", "台積電", "0", "0", "0", "99", "105", "99", "105.00", "<p style= color:red>+</p>", "5.00"],
+                ["2002", "中鋼", "0", "0", "0", "20", "20", "19", "19.60", "<p style= color:green>-</p>", "0.40"],
+            ],
+        }],
+    }
+    tpex_payload = {
+        "tables": [{
+            "data": [
+                ["3105", "穩懋", "110.00", "+10.00"],
+            ],
+        }],
+    }
+
+    class FakeResp:
+        def __init__(self, data):
+            self._data = data
+            self.ok = True
+        def json(self):
+            return self._data
+
+    def fake_get(url, *args, **kwargs):
+        if "MI_INDEX" in url:
+            return FakeResp(twse_payload)
+        return FakeResp(tpex_payload)
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    recent_map = exchange_data.get_market_recent_prices_map(["2026-11-13"])
+    assert recent_map["2330"][0]["close"] == 105.0
+    assert recent_map["2330"][0]["prev_close"] == 100.0
+    assert recent_map["2330"][0]["pct"] == 5.0
+    assert recent_map["2002"][0]["pct"] == -2.0
+    assert recent_map["3105"][0]["pct"] == 10.0
+
+    # 驗證主資料源模式：FinMind 被呼叫 0 次，仍完整算出收盤、漲跌幅、期間累計與金額
+    finmind_calls = {"n": 0}
+    monkeypatch.setattr(
+        "stock_strategies.chips_scanner.get_price_history",
+        lambda *a, **kw: finmind_calls.__setitem__("n", finmind_calls["n"] + 1),
+    )
+
+    multi_recent = {
+        "2330": [
+            {"date": "2026-11-11", "close": 102.0, "prev_close": 100.0, "pct": 2.0},
+            {"date": "2026-11-12", "close": 105.0, "prev_close": 102.0, "pct": 2.94},
+            {"date": "2026-11-13", "close": 110.0, "prev_close": 105.0, "pct": 4.76},
+        ]
+    }
+    cand = {"stock_id": "2330", "main_streak": 3, "streak_total_net_lots": 1000}
+    res = enrich_candidate_price(
+        cand,
+        check_vcp=False,
+        margin_stocks={"2330": {"margin_diff": -50, "margin_today": 1000}},
+        recent_prices_map=multi_recent,
+        use_finmind=False,
+    )
+    assert finmind_calls["n"] == 0
+    assert res["today_close"] == 110.0
+    assert res["today_pct"] == 4.76
+    assert res["streak_pct"] == 10.0  # 100 -> 110 = +10.0%
+    assert res["streak_amount"] == 1.1  # 1000 * 110 * 1000 / 1e8 = 1.1億
+    assert res["recent_daily_pcts"] == ["+2.0%", "+2.9%", "+4.8%"]
 
