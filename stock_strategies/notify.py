@@ -221,6 +221,17 @@ def _market_sentiment(signals: list[dict]) -> str:
         return "🔴 偏空 — 普遍下跌，建議空手等待"
 
 
+def _format_val_badge(c: dict) -> str:
+    val = c.get("valuation", {})
+    pe_val = val.get("pe")
+    y_val = val.get("yield", 0.0)
+    y_str = f"殖 {y_val:.1f}%" if y_val else "殖 0%"
+    if c.get("is_etf") and not pe_val:
+        return f"ETF · {y_str}" if y_val else "ETF 趨勢"
+    pe_str = f"PE {pe_val:.1f}x" if pe_val else "PE --"
+    return f"{pe_str} · {y_str}"
+
+
 def format_messages(
     signals: list[dict],
     watchlist: list[dict] = None,
@@ -259,12 +270,8 @@ def format_messages(
             tech_sigs = "/".join(c.get("tech_signals", [])) or "多頭指標"
             vp = " + ".join(c.get("volume_patterns", [])) or "量價穩健"
             chips_note = c.get("chips_summary", "")
-            val = c.get("valuation", {})
-            pe_val = val.get("pe")
-            pe_str = f"PE {pe_val:.1f}x" if pe_val else "PE --"
-            y_val = val.get("yield", 0.0)
-            y_str = f"殖 {y_val:.1f}%" if y_val else "殖 0%"
-            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {pe_str} · {y_str})")
+            val_badge = _format_val_badge(c)
+            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {val_badge})")
             lines.append(f"  收盤 {s.get('entry_price')} ({t.get('chg_5d', 0):+.1f}% 5日) | 訊號: {tech_sigs}")
             lines.append(f"  量能: {vp}" + (f" | 籌碼: {chips_note}" if chips_note else ""))
             ep = float(s.get("entry_price") or 0)
@@ -287,17 +294,13 @@ def format_messages(
     if top_watches:
         for s in top_watches:
             c = s.get("components", {})
-            val = c.get("valuation", {})
-            pe_val = val.get("pe")
-            pe_str = f"PE {pe_val:.1f}x" if pe_val else "PE --"
-            y_val = val.get("yield", 0.0)
-            y_str = f"殖 {y_val:.1f}%" if y_val else "殖 0%"
+            val_badge = _format_val_badge(c)
             ep = float(s.get("entry_price") or 0)
             sp = float(s.get("stop_loss_price") or 0)
             stop_pct = round((sp / ep - 1) * 100) if ep > 0 and sp > 0 else -8
             vcp_tags = [sig for sig in c.get("tech_signals", []) if "VCP" in sig]
             vcp_inline = f" | 🎯{'/'.join(vcp_tags)}" if vcp_tags else ""
-            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {pe_str} · {y_str}{vcp_inline}) — 收盤 {s.get('entry_price')}")
+            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {val_badge}{vcp_inline}) — 收盤 {s.get('entry_price')}")
             lines.append(f"  ↳ 差在: {_explain_why(s)}")
             lines.append(f"  ↳ 參考防守價: {s['stop_loss_price']} ({stop_pct:+d}%)")
             lines.append("")

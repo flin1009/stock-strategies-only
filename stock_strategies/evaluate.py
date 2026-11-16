@@ -6,7 +6,7 @@ import pandas as pd
 from .config import CONFIG
 from .data import get_fundamental, get_price_history
 from .datasources import get_institutional, get_index_history
-from .exchange_data import get_market_valuation_map
+from .exchange_data import get_market_valuation_map, get_market_recent_inst_map
 from .indicators import add_indicators, tech_score_at
 from .backtest import backtest
 from .volume import detect_patterns, verdict as volume_verdict
@@ -27,15 +27,21 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
     }
 
     try:
-        fund = get_fundamental(stock_id)
-        eps_vals = list(fund["eps"].values())
-        roe_vals = list(fund["roe"].values())
-        fund_pass = (
-            len(eps_vals) >= 2
-            and len(roe_vals) >= 2
-            and min(eps_vals) > params["eps_threshold"]
-            and min(roe_vals) > params["roe_threshold"]
-        )
+        sid_clean = str(stock_id).strip()
+        is_etf = sid_clean.startswith("00")
+        if is_etf:
+            eps_vals, roe_vals = [], []
+            fund_pass = True
+        else:
+            fund = get_fundamental(stock_id)
+            eps_vals = list(fund["eps"].values())
+            roe_vals = list(fund["roe"].values())
+            fund_pass = (
+                len(eps_vals) >= 2
+                and len(roe_vals) >= 2
+                and min(eps_vals) > params["eps_threshold"]
+                and min(roe_vals) > params["roe_threshold"]
+            )
 
         px = get_price_history(stock_id, params["backtest_years"])
         if len(px) < 100:
@@ -64,25 +70,18 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
         else:
             vp = {"patterns": [], "bonus": 0, "details": {}}
 
-        if params.get("use_vcp_breakout", True):
+        if (not is_etf) and params.get("use_vcp_breakout", True):
             vcp_info = detect_vcp(px, index_df=index_df if not index_df.empty else None)
             if vcp_info.get("signal"):
                 ts["signals"] = list(ts["signals"]) + [vcp_info["signal"]]
         else:
             vcp_info = {"signal": None, "bonus": 0}
 
-        # 1. 基本面評分 (結合財報 EPS/ROE 與 證交所/櫃買 官方即時 PE/殖利率快照)
-        min_eps = min(eps_vals) if eps_vals else 0.0
-        min_roe = min(roe_vals) if roe_vals else 0.0
-        eps_score = min(50.0, max(0.0, (min_eps / 4.0) * 50.0))
-        roe_score = min(50.0, max(0.0, ((min_roe - 5.0) / 20.0) * 50.0))
-        fund_score = min(100.0, max(20.0, eps_score + roe_score))
-
-        # 融入官方最新 PE 與 殖利率
+        # 1. 基本面評分 (結合財報 EPS/ROE 與 證交所/櫃買 官方即時 PE/殖利率快照；ETF 採中性評分免扣財報)
         val_info = {}
         try:
             val_map = get_market_valuation_map()
-            val_info = val_map.get(str(stock_id).strip(), {})
+            val_info = val_map.get(sid_clean, {})
         except Exception:
             pass
 
@@ -90,18 +89,31 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
         yield_val = val_info.get("yield", 0.0)
         pb_val = val_info.get("pb", 0.0)
 
-        if yield_val >= 5.0:
-            fund_score += 10.0
-        elif yield_val >= 3.5:
-            fund_score += 5.0
-
-        if pe_val is not None:
-            if 0 < pe_val <= 16.0:
-                fund_score += 5.0
-            elif pe_val > 50.0:
-                fund_score -= 10.0
+        if is_etf:
+            fund_score = 60.0
+            if yield_val >= 5.0:
+                fund_score += 15.0
+            elif yield_val >= 3.5:
+                fund_score += 8.0
         else:
-            fund_score -= 5.0
+            min_eps = min(eps_vals) if eps_vals else 0.0
+            min_roe = min(roe_vals) if roe_vals else 0.0
+            eps_score = min(50.0, max(0.0, (min_eps / 4.0) * 50.0))
+            roe_score = min(50.0, max(0.0, ((min_roe - 5.0) / 20.0) * 50.0))
+            fund_score = min(100.0, max(20.0, eps_score + roe_score))
+
+            if yield_val >= 5.0:
+                fund_score += 10.0
+            elif yield_val >= 3.5:
+                fund_score += 5.0
+
+            if pe_val is not None:
+                if 0 < pe_val <= 16.0:
+                    fund_score += 5.0
+                elif pe_val > 50.0:
+                    fund_score -= 10.0
+            else:
+                fund_score -= 5.0
 
         fund_score = round(min(100.0, max(0.0, fund_score)), 1)
 
@@ -126,12 +138,22 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
             shrunk_winrate = 0.5
         bt_score = round(shrunk_winrate * 100, 1)
 
-        # 4. 籌碼面評分 (0 ~ 100，基準 50 分中性)
+        # 4. 籌碼面評分 (0 ~ 100，基準 50 分中性；優先讀取 TWSE/TPEx 免費資料，無資料再退回 FinMind)
         chips_score = 50.0
         chips_summary = ""
         try:
-            start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
-            inst_df = get_institutional(stock_id, start=start_date)
+            inst_df = pd.DataFrame()
+            try:
+                inst_map = get_market_recent_inst_map(trading_days_count=5)
+                if sid_clean in inst_map and len(inst_map[sid_clean]) >= 3:
+                    inst_df = pd.DataFrame(inst_map[sid_clean])
+            except Exception:
+                inst_df = pd.DataFrame()
+
+            if inst_df.empty or len(inst_df) < 3:
+                start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+                inst_df = get_institutional(stock_id, start=start_date)
+
             if not inst_df.empty and len(inst_df) >= 3:
                 inst_slice = inst_df.tail(5)
                 tot_5d = inst_slice["total_net"].sum()
@@ -206,7 +228,7 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
 
         if bt.get("samples", 0) < 8:
             result["risk_notes"].append(f"回測樣本僅 {bt.get('samples', 0)} 次，統計弱")
-        if not fund_pass:
+        if (not is_etf) and (not fund_pass):
             result["risk_notes"].append("基本面未過門檻")
         if raw_winrate < 0.5:
             result["risk_notes"].append(f"歷史勝率 {raw_winrate*100:.0f}% 低於五成")
@@ -230,6 +252,7 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
             "action": action,
             "signal_score": signal_score,
             "components": {
+                "is_etf": is_etf,
                 "fundamental_pass": fund_pass,
                 "fundamental_score": fund_score,
                 "eps_min": min(eps_vals) if eps_vals else None,

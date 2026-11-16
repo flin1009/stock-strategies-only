@@ -977,3 +977,109 @@ def test_twse_tpex_recent_prices_primary_mode(monkeypatch, tmp_path):
     assert res["streak_amount"] == 1.1  # 1000 * 110 * 1000 / 1e8 = 1.1億
     assert res["recent_daily_pcts"] == ["+2.0%", "+2.9%", "+4.8%"]
 
+
+def test_chips_scanner_sorts_by_est_amount_before_vcp_cap(monkeypatch):
+    from stock_strategies.chips_scanner import _process_pool
+
+    monkeypatch.setattr("stock_strategies.chips_scanner.get_index_history", lambda *a, **kw: pd.DataFrame())
+    called_sids = []
+    monkeypatch.setattr(
+        "stock_strategies.chips_scanner.get_price_history",
+        lambda sid, years=1: called_sids.append(sid) or pd.DataFrame(),
+    )
+
+    raw = [
+        {"stock_id": "2002", "name": "中鋼", "main_streak": 3, "streak_total_net_lots": 5000, "tags": []},
+        {"stock_id": "2330", "name": "台積電", "main_streak": 3, "streak_total_net_lots": 1000, "tags": []},
+    ]
+    recent_prices = {
+        "2002": [{"date": "2026-11-13", "close": 20.0, "prev_close": 19.5, "pct": 2.56}],     # 1.0 億
+        "2330": [{"date": "2026-11-13", "close": 1000.0, "prev_close": 980.0, "pct": 2.04}],  # 10.0 億
+    }
+    res = _process_pool(
+        raw,
+        watchlist_sids=set(),
+        watchlist_names={},
+        latest_date="2026-11-13",
+        max_market_candidates=1,
+        is_sell=False,
+        delay_sec=0,
+        margin_stocks={},
+        daily_price_map={},
+        recent_prices_map=recent_prices,
+        finmind_state={"rate_limited": False},
+    )
+    assert len(res) == 1
+    assert res[0]["stock_id"] == "2330"  # 高價高金額優先進入前段與 VCP 掃描
+    assert called_sids == ["2330"]
+
+
+def test_evaluate_etf_skips_fundamental_and_uses_free_inst(monkeypatch):
+    from stock_strategies.evaluate import evaluate
+    from stock_strategies.notify import format_messages
+
+    # 造一段 120 日多頭日 K
+    n = 120
+    dates = pd.bdate_range("2026-01-01", periods=n)
+    close = [50.0 + i * 0.2 for i in range(n)]
+    px_df = pd.DataFrame({
+        "date": dates,
+        "open": [c - 0.1 for c in close],
+        "high": [c + 0.3 for c in close],
+        "low": [c - 0.3 for c in close],
+        "close": close,
+        "volume": [10_000_000] * n,
+    })
+
+    monkeypatch.setattr("stock_strategies.evaluate.get_price_history", lambda sid, years=3: px_df)
+    monkeypatch.setattr("stock_strategies.evaluate.get_index_history", lambda *a, **kw: pd.DataFrame())
+    monkeypatch.setattr("stock_strategies.evaluate.get_market_valuation_map", lambda: {})
+    monkeypatch.setattr(
+        "stock_strategies.evaluate.get_fundamental",
+        lambda sid: (_ for _ in ()).throw(AssertionError("ETF 不應呼叫 FinMind get_fundamental")),
+    )
+    monkeypatch.setattr(
+        "stock_strategies.evaluate.get_institutional",
+        lambda sid, start=None: (_ for _ in ()).throw(AssertionError("有 TWSE/TPEx 免費法人資料時不應打 FinMind")),
+    )
+    monkeypatch.setattr(
+        "stock_strategies.evaluate.get_market_recent_inst_map",
+        lambda trading_days_count=5: {
+            "0050": [
+                {"date": "2026-11-11", "foreign_net": 1000, "trust_net": 500, "total_net": 1500},
+                {"date": "2026-11-12", "foreign_net": 2000, "trust_net": 600, "total_net": 2600},
+                {"date": "2026-11-13", "foreign_net": 3000, "trust_net": 700, "total_net": 3700},
+            ]
+        },
+    )
+
+    res = evaluate("0050", "元大台灣50")
+    assert res["components"]["is_etf"] is True
+    assert res["components"]["fundamental_pass"] is True
+    assert "土洋同買" in res["components"]["chips_summary"]
+    assert "基本面未過門檻" not in res["risk_notes"]
+
+    msg = format_messages([res])[0]
+    assert "ETF 趨勢" in msg
+
+
+def test_cleanup_old_exchange_cache(monkeypatch, tmp_path):
+    from datetime import datetime
+    from stock_strategies import exchange_data
+
+    monkeypatch.setattr(exchange_data, "EXCHANGE_CACHE_DIR", tmp_path)
+    old_m = tmp_path / "market_20200101.parquet"
+    old_p = tmp_path / "prices_20200101.parquet"
+    today_str = datetime.now().strftime("%Y%m%d")
+    cur_m = tmp_path / f"market_{today_str}.parquet"
+
+    old_m.write_bytes(b"old")
+    old_p.write_bytes(b"old")
+    cur_m.write_bytes(b"new")
+
+    removed = exchange_data._cleanup_old_exchange_cache(days=30)
+    assert removed == 2
+    assert not old_m.exists()
+    assert not old_p.exists()
+    assert cur_m.exists()
+

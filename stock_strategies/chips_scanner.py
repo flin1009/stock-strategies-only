@@ -204,16 +204,26 @@ def _process_pool(
             c["is_watchlist"] = False
             mkt_pool.append(c)
 
+    def _est_amt(item: dict) -> float:
+        sid = str(item.get("stock_id", "")).strip()
+        close_px = 0.0
+        recs = (recent_prices_map or {}).get(sid)
+        if recs:
+            close_px = float(recs[-1].get("close", 0.0))
+        elif daily_price_map and sid in daily_price_map:
+            close_px = float(daily_price_map[sid].get("close", 0.0))
+        return abs(item.get("streak_total_net_lots", 0)) * close_px
+
     if is_sell:
-        # 連賣：賣超張數越多 (負最多) 排越前
+        # 連賣：優先依連賣天數，其次預估賣超金額（億元），其次賣超張數
         mkt_pool.sort(
-            key=lambda x: (x["main_streak"], -x["streak_total_net_lots"]),
+            key=lambda x: (x["main_streak"], _est_amt(x), -x["streak_total_net_lots"]),
             reverse=True,
         )
     else:
-        # 連買：買超張數越多排越前
+        # 連買：優先依連買天數，其次預估買超金額（億元），其次買超張數，讓高價主流股能進入 VCP 掃描前 15 強
         mkt_pool.sort(
-            key=lambda x: (x["main_streak"], x["streak_total_net_lots"]),
+            key=lambda x: (x["main_streak"], _est_amt(x), x["streak_total_net_lots"]),
             reverse=True,
         )
 

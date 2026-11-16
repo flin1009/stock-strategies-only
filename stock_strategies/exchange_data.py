@@ -27,6 +27,24 @@ def _ensure_cache_dir() -> Path:
     return EXCHANGE_CACHE_DIR
 
 
+def _cleanup_old_exchange_cache(days: int = 30) -> int:
+    """刪除超過指定天數的每日市場快取檔 (market_YYYYMMDD.parquet / prices_YYYYMMDD.parquet)。"""
+    if not EXCHANGE_CACHE_DIR.exists():
+        return 0
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+    removed = 0
+    for prefix in ("market_", "prices_"):
+        for p in EXCHANGE_CACHE_DIR.glob(f"{prefix}*.parquet"):
+            d_part = p.stem[len(prefix):]
+            if len(d_part) == 8 and d_part.isdigit() and d_part < cutoff:
+                try:
+                    p.unlink(missing_ok=True)
+                    removed += 1
+                except Exception:
+                    pass
+    return removed
+
+
 def _parse_int(val) -> int:
     if val is None or pd.isna(val):
         return 0
@@ -451,6 +469,7 @@ def get_market_prices_day(date_str: str) -> pd.DataFrame:
     if not combined.empty:
         try:
             combined.to_parquet(cache_file, index=False)
+            _cleanup_old_exchange_cache(30)
         except Exception:
             pass
     return combined
@@ -583,8 +602,9 @@ def get_market_day(date_str: str) -> pd.DataFrame:
     if not combined.empty:
         try:
             combined.to_parquet(cache_file, index=False)
-        except Exception as e:
-            print(f"快取寫入失敗: {e}")
+            _cleanup_old_exchange_cache(30)
+        except Exception:
+            pass
     return combined
 
 
@@ -788,5 +808,36 @@ def get_market_streak_candidates(
         "buy_candidates": buy_candidates,
         "sell_candidates": sell_candidates,
     }
+
+
+_RECENT_INST_MEM_CACHE: dict[tuple[str, int, str], dict[str, list[dict]]] = {}
+
+
+def get_market_recent_inst_map(trading_days_count: int = 5) -> dict[str, list[dict]]:
+    """取得全市場近 N 個交易日（由舊到新）三大法人買賣超序列（0 FinMind 額度）。
+
+    回傳 dict: {stock_id: [{"date": ..., "foreign_net": ..., "trust_net": ..., "total_net": ...}, ...]}
+    """
+    cache_key = (str(EXCHANGE_CACHE_DIR), trading_days_count, datetime.now().strftime("%Y-%m-%d-%H"))
+    if cache_key in _RECENT_INST_MEM_CACHE:
+        return _RECENT_INST_MEM_CACHE[cache_key]
+
+    days = get_recent_trading_days(count=trading_days_count)
+    by_stock: dict[str, list[dict]] = {}
+    for d in sorted(days):
+        df = get_market_day(d)
+        if df.empty:
+            continue
+        for row in df.itertuples(index=False):
+            by_stock.setdefault(str(row.stock_id).strip(), []).append({
+                "date": row.date,
+                "foreign_net": float(row.foreign_net),
+                "trust_net": float(row.trust_net),
+                "total_net": float(row.total_net),
+            })
+
+    if by_stock:
+        _RECENT_INST_MEM_CACHE[cache_key] = by_stock
+    return by_stock
 
 
