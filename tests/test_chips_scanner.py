@@ -707,3 +707,35 @@ def test_append_signals_valuation(monkeypatch):
     assert row[15] == "3.50%"
     assert row[16] == "4.50"
 
+
+def test_read_watchlist_preserves_leading_zeros(monkeypatch):
+    from stock_strategies.sheet import read_watchlist
+
+    class FakeWorksheet:
+        def __init__(self):
+            self.seen_ignore = None
+
+        def get_all_records(self, numericise_ignore=None):
+            self.seen_ignore = numericise_ignore
+            if numericise_ignore and 1 in numericise_ignore:
+                return [
+                    {"stock_id": "0050", "name": "元大台灣50", "enabled": "TRUE"},
+                    {"stock_id": "3227", "name": "原相", "enabled": "TRUE"},
+                    {"stock_id": "2330", "name": "台積電", "enabled": "FALSE"},
+                ]
+            return [
+                {"stock_id": 50, "name": "元大台灣50", "enabled": "TRUE"},
+            ]
+
+    fake_ws = FakeWorksheet()
+
+    class FakeSheet:
+        def worksheet(self, title):
+            return fake_ws
+
+    monkeypatch.setattr("stock_strategies.sheet.get_gsheet", lambda: FakeSheet())
+    res = read_watchlist()
+    assert fake_ws.seen_ignore == [1]
+    assert [r["stock_id"] for r in res] == ["0050", "3227"]
+    assert all(isinstance(r["stock_id"], str) for r in res)
+

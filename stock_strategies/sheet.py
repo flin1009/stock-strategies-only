@@ -17,11 +17,23 @@ def get_gsheet():
     return gc.open_by_key(os.environ["GOOGLE_SHEET_ID"])
 
 
+def _get_records_preserve_id(ws, id_col_idx: int = 1) -> list[dict]:
+    """讀取工作表紀錄，保留 stock_id 為字串（避免 gspread 將 '0050' 轉為 int 50）。"""
+    try:
+        rows = ws.get_all_records(numericise_ignore=[id_col_idx])
+    except TypeError:
+        rows = ws.get_all_records()
+    for r in rows:
+        if "stock_id" in r and r["stock_id"] is not None:
+            r["stock_id"] = str(r["stock_id"]).strip()
+    return rows
+
+
 def read_watchlist() -> list[dict]:
     """從 Google Sheet Watchlist 分頁讀股票清單"""
     sh = get_gsheet()
     ws = sh.worksheet("Watchlist")
-    rows = ws.get_all_records()
+    rows = _get_records_preserve_id(ws, id_col_idx=1)
     enabled = [
         r for r in rows
         if str(r.get("enabled", "")).upper() in ("TRUE", "1", "YES")
@@ -62,7 +74,7 @@ def append_signals(signals: list[dict]):
 
         rows.append([
             s.get("date", ""),
-            s.get("stock_id", ""),
+            str(s.get("stock_id", "")),
             s.get("name", ""),
             s.get("action", ""),
             s.get("signal_score", ""),
@@ -111,7 +123,7 @@ def add_to_watchlist(stock_id: str, name: str = "") -> dict:
     name_col = headers.index("name") + 1 if "name" in headers else None
     en_col = headers.index("enabled") + 1
 
-    rows = ws.get_all_records()
+    rows = _get_records_preserve_id(ws, id_col_idx=sid_col)
     for i, r in enumerate(rows, start=2):  # row 1 是 header
         if str(r.get("stock_id", "")).strip() == str(stock_id).strip():
             current = str(r.get("enabled", "")).upper()
@@ -134,7 +146,10 @@ def add_to_watchlist(stock_id: str, name: str = "") -> dict:
     if name_col is not None:
         new_row[name_col - 1] = name
     new_row[en_col - 1] = "TRUE"
-    ws.append_row(new_row)
+    try:
+        ws.append_row(new_row, value_input_option="RAW")
+    except TypeError:
+        ws.append_row(new_row)
     return {"status": "added", "stock_id": stock_id, "name": name}
 
 
@@ -145,9 +160,10 @@ def remove_from_watchlist(stock_id: str) -> dict:
     headers = _ensure_watchlist_headers(ws)
     if "enabled" not in headers:
         return {"status": "no_enabled_column"}
+    sid_col = headers.index("stock_id") + 1 if "stock_id" in headers else 1
     en_col = headers.index("enabled") + 1
 
-    rows = ws.get_all_records()
+    rows = _get_records_preserve_id(ws, id_col_idx=sid_col)
     for i, r in enumerate(rows, start=2):
         if str(r.get("stock_id", "")).strip() == str(stock_id).strip():
             ws.update_cell(i, en_col, "FALSE")
@@ -165,7 +181,7 @@ def read_latest_signals(limit: int = 50) -> list[dict]:
         ws = sh.worksheet("Signals")
     except gspread.WorksheetNotFound:
         return []
-    rows = ws.get_all_records()
+    rows = _get_records_preserve_id(ws, id_col_idx=2)
     if not rows:
         return []
     return rows[-limit:][::-1]  # 最新的在最前面
@@ -187,7 +203,7 @@ def read_performance() -> list[dict]:
         ws = sh.worksheet("Performance")
     except gspread.WorksheetNotFound:
         return []
-    return ws.get_all_records()
+    return _get_records_preserve_id(ws, id_col_idx=2)
 
 
 def write_performance(records: list[dict]):
@@ -206,7 +222,13 @@ def write_performance(records: list[dict]):
     if not records:
         return
 
-    rows = [[r.get(h, "") for h in PERFORMANCE_HEADERS] for r in records]
+    rows = [
+        [
+            str(r.get(h, "")) if h == "stock_id" and r.get(h, "") != "" else r.get(h, "")
+            for h in PERFORMANCE_HEADERS
+        ]
+        for r in records
+    ]
     ws.append_rows(rows)
 
 
