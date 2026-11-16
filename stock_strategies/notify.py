@@ -8,22 +8,64 @@ import requests
 from .config import CONFIG, TELEGRAM_API
 
 
-def send_telegram(text: str):
-    url = TELEGRAM_API.format(token=os.environ["TELEGRAM_BOT_TOKEN"])
+def _split_telegram_chunks(text: str, limit: int = 3950) -> list[str]:
+    """將超過 Telegram 單則上限 (4096 字元) 的訊息依段落/換行安全分段。"""
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    cur_lines: list[str] = []
+    cur_len = 0
+
+    for line in text.split("\n"):
+        add_len = len(line) + (1 if cur_lines else 0)
+        if cur_lines and cur_len + add_len > limit:
+            chunks.append("\n".join(cur_lines))
+            cur_lines = [line]
+            cur_len = len(line)
+        elif len(line) > limit:
+            if cur_lines:
+                chunks.append("\n".join(cur_lines))
+                cur_lines = []
+                cur_len = 0
+            for i in range(0, len(line), limit):
+                chunks.append(line[i : i + limit])
+        else:
+            cur_lines.append(line)
+            cur_len += add_len
+
+    if cur_lines:
+        chunks.append("\n".join(cur_lines))
+    return chunks
+
+
+def _post_telegram_chunk(url: str, chat_id: str, text: str) -> None:
     payload = {
-        "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+        "chat_id": chat_id,
         "text": text,
         "parse_mode": "Markdown",
     }
     r = requests.post(url, json=payload, timeout=10)
-    if not r.ok:
-        # 若 Markdown 解析失敗 (400)，改以純文字重發，確保訊息必定送達
-        if "can't parse entities" in r.text or r.status_code == 400:
-            payload.pop("parse_mode", None)
-            r2 = requests.post(url, json=payload, timeout=10)
-            if r2.ok:
-                return
-        print(f"Telegram 送失敗: {r.text}", file=sys.stderr)
+    if r.ok:
+        return
+    # 若 Markdown 解析失敗 (400)，改以純文字重發，確保訊息必定送達
+    if r.status_code == 400 and "can't parse entities" in r.text:
+        payload.pop("parse_mode", None)
+        r2 = requests.post(url, json=payload, timeout=10)
+        if r2.ok:
+            return
+        print(f"Telegram 送失敗: {r2.text}", file=sys.stderr)
+        raise RuntimeError(f"Telegram 送失敗 ({r2.status_code}): {r2.text}")
+    print(f"Telegram 送失敗: {r.text}", file=sys.stderr)
+    raise RuntimeError(f"Telegram 送失敗 ({r.status_code}): {r.text}")
+
+
+def send_telegram(text: str):
+    url = TELEGRAM_API.format(token=os.environ["TELEGRAM_BOT_TOKEN"])
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    chunks = _split_telegram_chunks(text, limit=3950)
+    for chunk in chunks:
+        _post_telegram_chunk(url, chat_id, chunk)
 
 
 
@@ -433,6 +475,63 @@ def _format_margin_tag(m_diff: int | None, is_sell: bool = False) -> str:
             return f" · 融資{m_diff:,}張"
 
 
+def _format_chips_item(
+    r: dict,
+    *,
+    is_sell: bool,
+    include_total_streak: bool = True,
+    show_recent: bool = True,
+) -> list[str]:
+    """格式化籌碼晚報單檔股票明細"""
+    verb = "連賣" if is_sell else "連買"
+    action_label = "賣超" if is_sell else "買超"
+    recent_label = "近日跌幅" if is_sell else "近日漲幅"
+
+    tags_str = f" ({'/'.join(r['tags'])})" if r.get("tags") else ""
+    out = [f"• *{r['stock_id']} {r['name']}*{tags_str} — {verb} *{r['main_streak']}* 天"]
+
+    sub_info = []
+    if r.get("foreign_streak", 0) > 0:
+        sub_info.append(f"外資連{r['foreign_streak']}")
+    if r.get("trust_streak", 0) > 0:
+        sub_info.append(f"投信連{r['trust_streak']}")
+    if include_total_streak and r.get("total_streak", 0) > 0:
+        sub_info.append(f"合計連{r['total_streak']}")
+
+    tr_ratio = r.get("trust_ratio", 0.0)
+    ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
+    streak_amt = r.get("streak_amount", 0.0)
+    if is_sell:
+        amt_str = f" ({streak_amt:.1f}億)" if streak_amt != 0 else ""
+    else:
+        amt_str = f" (+{streak_amt:.1f}億)" if streak_amt > 0 else ""
+    m_str = _format_margin_tag(r.get("margin_diff"), is_sell=is_sell)
+
+    out.append(
+        f"  {action_label}: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}"
+    )
+    out.append(
+        f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
+    )
+    if show_recent:
+        recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
+        if recent_pcts:
+            out.append(f"  ↳ {recent_label}: {recent_pcts}")
+    out.append("")
+    return out
+
+
+def _format_rest_chips_summary(rest: list[dict], label: str) -> list[str]:
+    if not rest:
+        return []
+    items = []
+    for r in rest:
+        amt = r.get("streak_amount", 0.0)
+        amt_str = f" {amt:+.1f}億" if amt != 0 else ""
+        items.append(f"{r['stock_id']}{r['name']}(連{r['main_streak']}{amt_str})")
+    return [f"📎 *{label} ({len(rest)} 檔)*: {', '.join(items)}", ""]
+
+
 def format_chips_streak(
     buy_records: list[dict] | dict = None,
     sell_records: list[dict] = None,
@@ -534,31 +633,9 @@ def format_chips_streak(
 
     lines.append(f"⭐ *自選股連買追蹤* (共 {len(wl_buys)} 檔達標)")
     if wl_buys:
-        for r in wl_buys:
-            tags_str = f" ({'/'.join(r['tags'])})" if r.get("tags") else ""
-            lines.append(
-                f"• *{r['stock_id']} {r['name']}*{tags_str} — 連買 *{r['main_streak']}* 天"
-            )
-            sub_info = []
-            if r.get("foreign_streak", 0) > 0:
-                sub_info.append(f"外資連{r['foreign_streak']}")
-            if r.get("trust_streak", 0) > 0:
-                sub_info.append(f"投信連{r['trust_streak']}")
-            if r.get("total_streak", 0) > 0:
-                sub_info.append(f"合計連{r['total_streak']}")
-            tr_ratio = r.get("trust_ratio", 0.0)
-            ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
-            streak_amt = r.get("streak_amount", 0.0)
-            amt_str = f" (+{streak_amt:.1f}億)" if streak_amt > 0 else ""
-            m_str = _format_margin_tag(r.get("margin_diff"), is_sell=False)
-            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}")
-            recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
-            lines.append(
-                f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
-            )
-            if recent_pcts:
-                lines.append(f"  ↳ 近日漲幅: {recent_pcts}")
-            lines.append("")
+        for r in wl_buys[:5]:
+            lines.extend(_format_chips_item(r, is_sell=False, include_total_streak=True, show_recent=True))
+        lines.extend(_format_rest_chips_summary(wl_buys[5:], "其餘自選連買"))
     else:
         lines.append("📋 今日自選股中無連續買超 ≥ 3 天標的。")
         lines.append("")
@@ -567,28 +644,7 @@ def format_chips_streak(
     if top_mkt_buys:
         lines.append(f"🚀 *全市場連買精選* (TOP {len(top_mkt_buys)})")
         for r in top_mkt_buys:
-            tags_str = f" ({'/'.join(r['tags'])})" if r.get("tags") else ""
-            lines.append(
-                f"• *{r['stock_id']} {r['name']}*{tags_str} — 連買 *{r['main_streak']}* 天"
-            )
-            sub_info = []
-            if r.get("foreign_streak", 0) > 0:
-                sub_info.append(f"外資連{r['foreign_streak']}")
-            if r.get("trust_streak", 0) > 0:
-                sub_info.append(f"投信連{r['trust_streak']}")
-            tr_ratio = r.get("trust_ratio", 0.0)
-            ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
-            streak_amt = r.get("streak_amount", 0.0)
-            amt_str = f" (+{streak_amt:.1f}億)" if streak_amt > 0 else ""
-            m_str = _format_margin_tag(r.get("margin_diff"), is_sell=False)
-            lines.append(f"  買超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}")
-            recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
-            lines.append(
-                f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
-            )
-            if recent_pcts:
-                lines.append(f"  ↳ 近日漲幅: {recent_pcts}")
-            lines.append("")
+            lines.extend(_format_chips_item(r, is_sell=False, include_total_streak=False, show_recent=False))
 
     # === 🔴 【空方 — 法人連賣避險警示】 ===
     lines.append("🔴 *【空方 — 法人連賣避險警示】*")
@@ -597,31 +653,9 @@ def format_chips_streak(
 
     lines.append(f"⚠️ *自選股連賣警戒* (共 {len(wl_sells)} 檔遭調節)")
     if wl_sells:
-        for r in wl_sells:
-            tags_str = f" ({'/'.join(r['tags'])})" if r.get("tags") else ""
-            lines.append(
-                f"• *{r['stock_id']} {r['name']}*{tags_str} — 連賣 *{r['main_streak']}* 天"
-            )
-            sub_info = []
-            if r.get("foreign_streak", 0) > 0:
-                sub_info.append(f"外資連{r['foreign_streak']}")
-            if r.get("trust_streak", 0) > 0:
-                sub_info.append(f"投信連{r['trust_streak']}")
-            if r.get("total_streak", 0) > 0:
-                sub_info.append(f"合計連{r['total_streak']}")
-            tr_ratio = r.get("trust_ratio", 0.0)
-            ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
-            streak_amt = r.get("streak_amount", 0.0)
-            amt_str = f" ({streak_amt:.1f}億)" if streak_amt != 0 else ""
-            m_str = _format_margin_tag(r.get("margin_diff"), is_sell=True)
-            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}")
-            recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
-            lines.append(
-                f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
-            )
-            if recent_pcts:
-                lines.append(f"  ↳ 近日跌幅: {recent_pcts}")
-            lines.append("")
+        for r in wl_sells[:5]:
+            lines.extend(_format_chips_item(r, is_sell=True, include_total_streak=True, show_recent=True))
+        lines.extend(_format_rest_chips_summary(wl_sells[5:], "其餘自選連賣"))
     else:
         lines.append("📋 今日自選股中無連續賣超 ≥ 3 天標的，持股籌碼安全。")
         lines.append("")
@@ -630,28 +664,7 @@ def format_chips_streak(
     if top_mkt_sells:
         lines.append(f"❄️ *全市場連賣提款榜* (TOP {len(top_mkt_sells)})")
         for r in top_mkt_sells:
-            tags_str = f" ({'/'.join(r['tags'])})" if r.get("tags") else ""
-            lines.append(
-                f"• *{r['stock_id']} {r['name']}*{tags_str} — 連賣 *{r['main_streak']}* 天"
-            )
-            sub_info = []
-            if r.get("foreign_streak", 0) > 0:
-                sub_info.append(f"外資連{r['foreign_streak']}")
-            if r.get("trust_streak", 0) > 0:
-                sub_info.append(f"投信連{r['trust_streak']}")
-            tr_ratio = r.get("trust_ratio", 0.0)
-            ratio_str = f" (投信佔股本 {tr_ratio:+.2f}%)" if tr_ratio != 0 else ""
-            streak_amt = r.get("streak_amount", 0.0)
-            amt_str = f" ({streak_amt:.1f}億)" if streak_amt != 0 else ""
-            m_str = _format_margin_tag(r.get("margin_diff"), is_sell=True)
-            lines.append(f"  賣超: {', '.join(sub_info)} | 累計 {r['streak_total_net_lots']:,} 張{amt_str}{ratio_str}{m_str}")
-            recent_pcts = " / ".join(r.get("recent_daily_pcts", []))
-            lines.append(
-                f"  收盤 {r['today_close']} ({r['today_pct']:+.2f}%) | 期間累計 {r['streak_pct']:+.2f}%"
-            )
-            if recent_pcts:
-                lines.append(f"  ↳ 近日跌幅: {recent_pcts}")
-            lines.append("")
+            lines.extend(_format_chips_item(r, is_sell=True, include_total_streak=False, show_recent=False))
 
     lines.append("💡 完整多空名單已同步寫入 Google Sheet Chips\\_Streak 與 Chips\\_Sell\\_Streak 分頁")
     return "\n".join(lines)

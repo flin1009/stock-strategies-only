@@ -739,3 +739,54 @@ def test_read_watchlist_preserves_leading_zeros(monkeypatch):
     assert [r["stock_id"] for r in res] == ["0050", "3227"]
     assert all(isinstance(r["stock_id"], str) for r in res)
 
+
+def test_send_telegram_splits_long_message(monkeypatch):
+    from stock_strategies.notify import send_telegram
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456")
+
+    sent_chunks = []
+
+    class FakeResp:
+        ok = True
+        status_code = 200
+        text = "ok"
+
+    def fake_post(url, json=None, timeout=10):
+        sent_chunks.append(json["text"])
+        return FakeResp()
+
+    monkeypatch.setattr("stock_strategies.notify.requests.post", fake_post)
+
+    long_msg = "\n".join([f"第 {i} 行測試訊息內容 ABCDEFGHIJ" for i in range(300)])
+    assert len(long_msg) > 4096
+    send_telegram(long_msg)
+    assert len(sent_chunks) >= 2
+    assert all(len(c) <= 3950 for c in sent_chunks)
+    assert "\n".join(sent_chunks) == long_msg
+
+
+def test_format_chips_streak_collapses_long_watchlist():
+    from stock_strategies.notify import format_chips_streak
+
+    wl_buys = [
+        {
+            "stock_id": f"23{i:02d}",
+            "name": f"股{i}",
+            "is_watchlist": True,
+            "main_streak": 4,
+            "foreign_streak": 4,
+            "trust_streak": 0,
+            "streak_total_net_lots": 1000,
+            "streak_amount": float(10 - i),
+            "today_close": 100.0,
+            "today_pct": 1.0,
+            "streak_pct": 3.0,
+        }
+        for i in range(8)
+    ]
+    msg = format_chips_streak({"buy_records": wl_buys, "sell_records": []})
+    assert "其餘自選連買 (3 檔)" in msg
+    assert "2305股5(連4 +5.0億)" in msg
+
