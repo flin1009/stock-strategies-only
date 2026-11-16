@@ -208,3 +208,19 @@ def test_format_messages_dynamic_stop_target_pct():
     msg = format_messages(signals)[0]
     assert "訊號: 均線多頭/VCP突破" in msg
     assert "損 92.0 (-8%) / 標 115.0 (+15%)" in msg
+
+    watch_signals = [{
+        "stock_id": "3105",
+        "name": "穩懋",
+        "action": "WATCH",
+        "signal_score": 68.0,
+        "entry_price": 200.0,
+        "stop_loss_price": 184.0,
+        "components": {
+            "tech_signals": ["均線多頭", "VCP蓄勢"],
+            "valuation": {"pe": 25.0, "yield": 1.0, "pb": 2.0},
+        },
+        "risk_notes": [],
+    }]
+    wmsg = format_messages(watch_signals)[0]
+    assert "🎯VCP蓄勢" in wmsg

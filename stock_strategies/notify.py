@@ -222,7 +222,9 @@ def format_messages(
             ep = float(s.get("entry_price") or 0)
             sp = float(s.get("stop_loss_price") or 0)
             stop_pct = round((sp / ep - 1) * 100) if ep > 0 and sp > 0 else -8
-            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {pe_str} · {y_str}) — 收盤 {s.get('entry_price')}")
+            vcp_tags = [sig for sig in c.get("tech_signals", []) if "VCP" in sig]
+            vcp_inline = f" | 🎯{'/'.join(vcp_tags)}" if vcp_tags else ""
+            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {pe_str} · {y_str}{vcp_inline}) — 收盤 {s.get('entry_price')}")
             lines.append(f"  ↳ 差在: {_explain_why(s)}")
             lines.append(f"  ↳ 參考防守價: {s['stop_loss_price']} ({stop_pct:+d}%)")
             lines.append("")

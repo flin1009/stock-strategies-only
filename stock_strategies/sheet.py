@@ -57,6 +57,10 @@ def append_signals(signals: list[dict]):
     sh = get_gsheet()
     try:
         ws = sh.worksheet("Signals")
+        if hasattr(ws, "row_values") and hasattr(ws, "update"):
+            row1 = ws.row_values(1)
+            if row1 and len(row1) < len(SIGNALS_HEADERS):
+                ws.update(range_name="A1", values=[SIGNALS_HEADERS], value_input_option="RAW")
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title="Signals", rows=1000, cols=20)
         ws.append_row(SIGNALS_HEADERS)
