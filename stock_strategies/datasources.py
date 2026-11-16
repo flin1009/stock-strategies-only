@@ -237,4 +237,18 @@ def get_index_history(index_id: str = "TAIEX", start: str | None = None,
                 df[c] = pd.to_numeric(df[c], errors="coerce")
         keep = [c for c in ["date", "open", "high", "low", "close"] if c in df.columns]
         return df[keep].sort_values("date").reset_index(drop=True)
+
+    # FinMind 失敗或限流時，改由證交所免費 FMTQIK 備援大盤指數，確保空頭濾鏡不斷線
+    if index_id in ("TAIEX", "TWII"):
+        try:
+            from .exchange_data import get_twse_taiex_history
+            fb = get_twse_taiex_history(months=2)
+            if not fb.empty:
+                if start:
+                    fb = fb[fb["date"] >= pd.to_datetime(start)]
+                if as_of:
+                    fb = fb[fb["date"] <= pd.to_datetime(as_of)]
+                return fb.sort_values("date").reset_index(drop=True)
+        except Exception:
+            pass
     return pd.DataFrame()

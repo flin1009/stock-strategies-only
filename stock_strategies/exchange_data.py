@@ -841,3 +841,78 @@ def get_market_recent_inst_map(trading_days_count: int = 5) -> dict[str, list[di
     return by_stock
 
 
+def get_twse_taiex_history(months: int = 2, timeout: int = 15) -> pd.DataFrame:
+    """從證交所 FMTQIK 抓取近期加權指數 (TAIEX) 每日收盤資料（0 FinMind 額度，大盤濾鏡備援）。
+
+    回傳 DataFrame 欄位: date, open, high, low, close
+    """
+    _ensure_cache_dir()
+    cache_file = EXCHANGE_CACHE_DIR / "taiex_fmtqik.parquet"
+    if cache_file.exists():
+        try:
+            mtime = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            if datetime.now() - mtime < timedelta(hours=12):
+                return pd.read_parquet(cache_file)
+        except Exception:
+            pass
+
+    now = datetime.now()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    rows: list[dict] = []
+
+    for m in range(months):
+        y, mo = now.year, now.month - m
+        while mo <= 0:
+            mo += 12
+            y -= 1
+        d_param = f"{y}{mo:02d}01"
+        url = f"https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?date={d_param}&response=json"
+        try:
+            r = requests.get(url, headers=headers, timeout=timeout)
+            if not r.ok:
+                continue
+            d = r.json()
+            if d.get("stat") != "OK":
+                continue
+            for item in d.get("data", []):
+                if len(item) < 5:
+                    continue
+                parts = str(item[0]).strip().split("/")
+                if len(parts) != 3:
+                    continue
+                try:
+                    gy = int(parts[0]) + 1911
+                    dt_str = f"{gy:04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+                except ValueError:
+                    continue
+                close = _parse_float(item[4])
+                if close is None or close <= 0:
+                    continue
+                rows.append({
+                    "date": dt_str,
+                    "open": close,
+                    "high": close,
+                    "low": close,
+                    "close": close,
+                })
+        except Exception as e:
+            print(f"[TWSE] 抓取大盤 FMTQIK ({d_param}) 失敗: {e}")
+
+    if not rows:
+        if cache_file.exists():
+            try:
+                return pd.read_parquet(cache_file)
+            except Exception:
+                pass
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"]).drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+    try:
+        df.to_parquet(cache_file, index=False)
+    except Exception:
+        pass
+    return df
+
+

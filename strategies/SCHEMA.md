@@ -34,7 +34,7 @@
 
 ### 評分加權
 
-- `weight_fundamental` / `weight_technical` / `weight_backtest` (0-1) — 三者加總應 = 1
+- `weight_chips` / `weight_technical` / `weight_fundamental` / `weight_backtest` (0-1) — 四者加總應 = 1
 - `min_total_score_for_buy` (0-100) — 總分達多少才考慮 BUY
 - `min_tech_score_for_buy` (0-100) — 技術分至少要達多少才考慮 BUY
 

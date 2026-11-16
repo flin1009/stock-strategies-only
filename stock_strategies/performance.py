@@ -94,23 +94,31 @@ def update_performance(
                     (float(row["close"]) / entry_open - 1) * 100, 2
                 )
 
-            # --- 是否觸及停利/停損（20 日內）---
+            # --- 是否觸及停利/停損（20 日內，逐日按時間順序先碰為準）---
             window_start = entry_day_iloc + 1
             window_end = min(entry_day_iloc + 1 + 20, len(px))
             window = px.iloc[window_start:window_end]
             if len(window) > 0:
-                hi = float(window["high"].max())
-                lo = float(window["low"].min())
-                # 只在還沒標記過時補上，讓結果單調不來回跳
-                if not r.get("hit_target"):
-                    r["hit_target"] = (
-                        "Y" if hi >= entry_open * (1 + CONFIG["target_return"]) else ""
-                    )
-                if not r.get("hit_stop"):
-                    r["hit_stop"] = (
-                        "Y" if lo <= entry_open * (1 - CONFIG["stop_loss"]) else ""
-                    )
-                # 追蹤滿 20 天才把空的明確標 N
+                target_px = entry_open * (1 + CONFIG["target_return"])
+                stop_px = entry_open * (1 - CONFIG["stop_loss"])
+                already_decided = (
+                    str(r.get("hit_target", "")).upper() == "Y"
+                    or str(r.get("hit_stop", "")).upper() == "Y"
+                )
+                if not already_decided:
+                    for _, wrow in window.iterrows():
+                        w_hi = float(wrow["high"])
+                        w_lo = float(wrow["low"])
+                        # 保守原則：同日同時觸及停損與停利，先計停損
+                        if w_lo <= stop_px:
+                            r["hit_stop"] = "Y"
+                            r["hit_target"] = "N"
+                            break
+                        if w_hi >= target_px:
+                            r["hit_target"] = "Y"
+                            r["hit_stop"] = "N"
+                            break
+                # 追蹤滿 20 天才把仍未觸及的明確標 N
                 if len(window) >= 20:
                     if r.get("hit_target") != "Y":
                         r["hit_target"] = "N"

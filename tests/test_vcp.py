@@ -264,3 +264,102 @@ def test_chips_scanner_enrich_vcp_and_format(monkeypatch):
 
     msg_empty = format_chips_streak({"buy_records": [{"stock_id": "2002", "name": "中鋼", "main_streak": 3, "streak_total_net_lots": 100, "today_close": 20.0, "today_pct": 0.5, "streak_pct": 1.0}], "sell_records": []})
     assert "VCP 起漲雷達" not in msg_empty
+
+
+def test_format_premarket_with_vcp_tag():
+    from stock_strategies.notify import format_premarket
+
+    signals = [
+        {"date": "2026-11-16", "action": "BUY", "stock_id": "2330", "name": "台積電", "signal_score": 88, "tech_signals": "均線多頭, VCP突破"},
+        {"date": "2026-11-16", "action": "WATCH", "stock_id": "3105", "name": "穩懋", "signal_score": 72, "tech_signals": "均線多頭, VCP蓄勢"},
+        {"date": "2026-11-16", "action": "WATCH", "stock_id": "2412", "name": "中華電", "signal_score": 65, "tech_signals": "KD黃金交叉"},
+    ]
+    msg = format_premarket(None, signals)
+    assert "BUY 2330 台積電 (88分) ·" in msg
+    assert "· 🎯VCP突破" in msg
+    assert "WATCH 3105 穩懋 (72分) ·" in msg
+    assert "· 🎯VCP蓄勢" in msg
+    assert "中華電 (65分) · 夜盤中性⚪\n" in msg  # 無 VCP 者保持乾淨
+
+
+def test_performance_chronological_stop_before_target(monkeypatch):
+    from stock_strategies.performance import update_performance
+
+    # 訊號日 2026-10-01，隔日 2026-10-02 開盤 100.0 進場
+    # 第 3 個交易日跌破 -8% (low=90)，第 15 個交易日才漲回 +15% (high=115) → 應只計 hit_stop=Y, hit_target=N
+    dates = pd.bdate_range("2026-10-01", periods=25)
+    opens = [100.0] * 25
+    highs = [102.0] * 25
+    lows = [98.0] * 25
+    closes = [100.0] * 25
+
+    lows[3] = 90.0    # 先停損 (-10% <= -8%)
+    closes[3] = 91.0
+    highs[15] = 115.0  # 後才反彈到 +15%
+    closes[15] = 114.0
+
+    px = pd.DataFrame({"date": dates, "open": opens, "high": highs, "low": lows, "close": closes})
+    monkeypatch.setattr("stock_strategies.performance.get_price_history", lambda sid, years=1: px)
+
+    existing = [{
+        "signal_date": "2026-10-01",
+        "stock_id": "2330",
+        "name": "台積電",
+        "entry_close": 100.0,
+        "entry_open": "",
+        "t5_date": "", "t5_close": "", "t5_ret": "",
+        "t10_date": "", "t10_close": "", "t10_ret": "",
+        "t20_date": "", "t20_close": "", "t20_ret": "",
+        "hit_target": "", "hit_stop": "",
+        "status": "追蹤中",
+    }]
+    out = update_performance(existing, [])
+    assert len(out) == 1
+    assert out[0]["hit_stop"] == "Y"
+    assert out[0]["hit_target"] == "N"
+    assert out[0]["status"] == "完成"
+
+
+def test_get_index_history_twse_fmtqik_fallback(monkeypatch, tmp_path):
+    from stock_strategies import datasources as ds
+    from stock_strategies import exchange_data as ed
+    from stock_strategies.cache import FinMindRateLimitError
+
+    monkeypatch.setattr(ed, "EXCHANGE_CACHE_DIR", tmp_path)
+
+    def boom(*a, **kw):
+        raise FinMindRateLimitError("402")
+
+    monkeypatch.setattr(ds, "fetch_finmind_cached", boom)
+
+    fake_fmtqik = {
+        "stat": "OK",
+        "data": [
+            ["115/11/02", "0", "0", "0", "23,000.50", "+100.00"],
+            ["115/11/03", "0", "0", "0", "23,250.00", "+249.50"],
+        ],
+    }
+
+    class FakeResp:
+        ok = True
+        def json(self):
+            return fake_fmtqik
+
+    monkeypatch.setattr(ed.requests, "get", lambda *a, **kw: FakeResp())
+
+    out = ds.get_index_history("TAIEX", start="2026-11-01")
+    assert len(out) == 2
+    assert list(out["close"]) == [23000.5, 23250.0]
+
+
+def test_default_strategy_matches_param_defaults():
+    s = get_strategy("default")
+    assert s is not None
+    p = s["params"]
+    assert p["eps_threshold"] == 2.0
+    assert p["weight_chips"] == 0.25
+    assert p["weight_technical"] == 0.35
+    assert p["weight_fundamental"] == 0.25
+    assert p["weight_backtest"] == 0.15
+    assert p["use_vcp_breakout"] is True
+    assert p["vcp_only_signal"] is False

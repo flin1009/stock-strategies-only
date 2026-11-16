@@ -463,8 +463,13 @@ def format_premarket(night: dict | None, signals: list[dict]) -> str:
             dot = "🟢" if act == "BUY" else "🟡"
             score = s.get("signal_score", "")
             score_str = f"({score}分)" if score else ""
+            tech_sigs = str(s.get("tech_signals", ""))
+            vcp_tag = (
+                " · 🎯VCP突破" if "VCP突破" in tech_sigs
+                else (" · 🎯VCP蓄勢" if "VCP蓄勢" in tech_sigs else "")
+            )
             lines.append(
-                f"{dot} {act} {s.get('stock_id', '')} {s.get('name', '')} {score_str} · {tag}"
+                f"{dot} {act} {s.get('stock_id', '')} {s.get('name', '')} {score_str} · {tag}{vcp_tag}"
             )
         if len(watches) > 3:
             rest_strs = [f"{s.get('stock_id', '')}{s.get('name', '')}" for s in watches[3:8]]
