@@ -1083,3 +1083,33 @@ def test_cleanup_old_exchange_cache(monkeypatch, tmp_path):
     assert not old_p.exists()
     assert cur_m.exists()
 
+
+def test_dual_track_vcp_selection_includes_small_caps_and_excludes_etf():
+    from stock_strategies.chips_scanner import _select_vcp_market_sids
+
+    mkt_pool = [
+        # 1. 超高金額 ETF（應排除）
+        {"stock_id": "00685L", "main_streak": 5, "streak_total_net_lots": 50000, "shares_issued": 100_000_000},
+        # 2. 兩檔大資金權值股（連4天仍應憑大金額進入軌道 A）
+        {"stock_id": "3661", "main_streak": 4, "streak_total_net_lots": 5000, "shares_issued": 80_000_000},    # 150 億
+        {"stock_id": "2891", "main_streak": 5, "streak_total_net_lots": 80000, "shares_issued": 20_000_000_000},  # 32 億
+        # 3. 小型鎖碼股：金額僅 1.2 億（低於權值），但佔股本高達 6% (>= 0.3 億) → 應由軌道 B 入選
+        {"stock_id": "5230", "main_streak": 5, "streak_total_net_lots": 3000, "shares_issued": 50_000_000},     # 1.2 億, 6%
+        # 4. 極低流動性冷門小股：僅 0.05 億 (< 0.3 億) → 軌道 B 應濾除
+        {"stock_id": "9999", "main_streak": 5, "streak_total_net_lots": 500, "shares_issued": 5_000_000},       # 0.05 億, 10%
+    ]
+    recent_prices = {
+        "00685L": [{"close": 100.0}],   # 500 億 ETF
+        "3661": [{"close": 3000.0}],    # 150 億
+        "2891": [{"close": 40.0}],      # 32 億
+        "5230": [{"close": 40.0}],      # 1.2 億
+        "9999": [{"close": 10.0}],      # 0.05 億
+    }
+
+    selected = _select_vcp_market_sids(mkt_pool, recent_prices, {}, top_amt=2, top_cap=2)
+    assert "00685L" not in selected
+    assert "3661" in selected
+    assert "2891" in selected
+    assert "5230" in selected
+    assert "9999" not in selected
+

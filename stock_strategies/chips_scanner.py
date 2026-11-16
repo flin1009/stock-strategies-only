@@ -175,6 +175,85 @@ def enrich_candidate_price(
     return candidate
 
 
+def _est_amt_yi(
+    item: dict,
+    recent_prices_map: Optional[dict],
+    daily_price_map: Optional[dict],
+) -> float:
+    """估算累計買/賣超金額（億元），供雙軌挑選高流動性主流股與濾除冷門股。"""
+    sid = str(item.get("stock_id", "")).strip()
+    close_px = 0.0
+    recs = (recent_prices_map or {}).get(sid)
+    if recs:
+        close_px = float(recs[-1].get("close", 0.0))
+    elif daily_price_map and sid in daily_price_map:
+        close_px = float(daily_price_map[sid].get("close", 0.0))
+    return abs(item.get("streak_total_net_lots", 0)) * close_px * 1000 / 1e8
+
+
+def _net_cap_ratio(item: dict) -> float:
+    """計算累計買超張數佔已發行股數比例（識別小型股籌碼鎖定力道）。"""
+    shares = item.get("shares_issued", 0) or 0
+    if shares <= 0:
+        return 0.0
+    return abs(item.get("streak_total_net_lots", 0)) * 1000 / shares
+
+
+def _select_vcp_market_sids(
+    mkt_pool: list[dict],
+    recent_prices_map: Optional[dict],
+    daily_price_map: Optional[dict],
+    top_amt: int = 8,
+    top_cap: int = 7,
+    min_amt_yi_for_small: float = 0.3,
+) -> set[str]:
+    """雙軌選秀挑選 VCP 掃描對象（排除 00 開頭 ETF）：
+    - 軌道 A（大資金主流）：依累計買超金額取前 top_amt 名
+    - 軌道 B（小型鎖碼黑馬）：在買超 >= 0.3 億前提下，依買超佔股本比取前 top_cap 名
+    """
+    non_etf = [c for c in mkt_pool if not str(c.get("stock_id", "")).startswith("00")]
+    if not non_etf:
+        return set()
+
+    by_amt = sorted(
+        non_etf,
+        key=lambda x: (
+            _est_amt_yi(x, recent_prices_map, daily_price_map),
+            x["main_streak"],
+            x["streak_total_net_lots"],
+        ),
+        reverse=True,
+    )
+    selected: list[str] = [str(x["stock_id"]) for x in by_amt[:top_amt]]
+    selected_set = set(selected)
+
+    has_price_data = bool(recent_prices_map or daily_price_map)
+    small_pool = [
+        x for x in non_etf
+        if _net_cap_ratio(x) > 0
+        and (not has_price_data or _est_amt_yi(x, recent_prices_map, daily_price_map) >= min_amt_yi_for_small)
+    ]
+    by_cap = sorted(
+        small_pool,
+        key=lambda x: (
+            _net_cap_ratio(x),
+            x["main_streak"],
+            _est_amt_yi(x, recent_prices_map, daily_price_map),
+        ),
+        reverse=True,
+    )
+    added = 0
+    for x in by_cap:
+        sid = str(x["stock_id"])
+        if sid not in selected_set:
+            selected_set.add(sid)
+            added += 1
+            if added >= top_cap:
+                break
+
+    return selected_set
+
+
 def _process_pool(
     raw_candidates: list[dict],
     watchlist_sids: set[str],
@@ -204,30 +283,34 @@ def _process_pool(
             c["is_watchlist"] = False
             mkt_pool.append(c)
 
-    def _est_amt(item: dict) -> float:
-        sid = str(item.get("stock_id", "")).strip()
-        close_px = 0.0
-        recs = (recent_prices_map or {}).get(sid)
-        if recs:
-            close_px = float(recs[-1].get("close", 0.0))
-        elif daily_price_map and sid in daily_price_map:
-            close_px = float(daily_price_map[sid].get("close", 0.0))
-        return abs(item.get("streak_total_net_lots", 0)) * close_px
-
     if is_sell:
         # 連賣：優先依連賣天數，其次預估賣超金額（億元），其次賣超張數
         mkt_pool.sort(
-            key=lambda x: (x["main_streak"], _est_amt(x), -x["streak_total_net_lots"]),
+            key=lambda x: (
+                x["main_streak"],
+                _est_amt_yi(x, recent_prices_map, daily_price_map),
+                -x["streak_total_net_lots"],
+            ),
             reverse=True,
         )
+        vcp_target_sids: set[str] = set()
+        selected_market = mkt_pool[:max_market_candidates]
     else:
-        # 連買：優先依連買天數，其次預估買超金額（億元），其次買超張數，讓高價主流股能進入 VCP 掃描前 15 強
+        # 連買：雙軌選秀挑出大資金(TOP 8) + 小型鎖碼黑馬(TOP 7) 確保兩者都進 VCP 雷達與候選清單
+        vcp_target_sids = _select_vcp_market_sids(
+            mkt_pool, recent_prices_map, daily_price_map, top_amt=8, top_cap=7
+        )
         mkt_pool.sort(
-            key=lambda x: (x["main_streak"], _est_amt(x), x["streak_total_net_lots"]),
+            key=lambda x: (
+                1 if str(x.get("stock_id", "")) in vcp_target_sids else 0,
+                x["main_streak"],
+                _est_amt_yi(x, recent_prices_map, daily_price_map),
+                x["streak_total_net_lots"],
+            ),
             reverse=True,
         )
+        selected_market = mkt_pool[:max_market_candidates]
 
-    selected_market = mkt_pool[:max_market_candidates]
     combined = wl_pool + selected_market
 
     index_df = None
@@ -239,16 +322,16 @@ def _process_pool(
         except Exception:
             index_df = None
 
-    # 價格/漲跌幅已全面由證交所/櫃買免費行情供給；FinMind 僅輔助買方自選+前15強做 VCP 掃描
-    finmind_mkt_cap = 0 if is_sell else 15
-
+    # 價格/漲跌幅已全面由證交所/櫃買免費行情供給；FinMind 僅輔助買方自選+雙軌 TOP 15 做 VCP 掃描
     enriched = []
-    mkt_seen = 0
     for item in combined:
+        sid = str(item.get("stock_id", "")).strip()
         is_wl = bool(item.get("is_watchlist"))
-        if not is_wl:
-            mkt_seen += 1
-        allow_finmind = (not is_sell) and (is_wl or mkt_seen <= finmind_mkt_cap)
+        allow_finmind = (
+            (not is_sell)
+            and (not sid.startswith("00"))
+            and (is_wl or sid in vcp_target_sids)
+        )
         try:
             enriched.append(
                 enrich_candidate_price(
