@@ -11,6 +11,7 @@ from .indicators import add_indicators, tech_score_at
 from .backtest import backtest
 from .volume import detect_patterns, verdict as volume_verdict
 from .vcp import detect_vcp
+from .bb_trend import detect_bb_trend
 from .loader import merge_params
 
 
@@ -77,6 +78,13 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
         else:
             vcp_info = {"signal": None, "bonus": 0}
 
+        if (not is_etf) and params.get("use_bb_trend", True):
+            bb_info = detect_bb_trend(px)
+            if bb_info.get("signal"):
+                ts["signals"] = list(ts["signals"]) + [bb_info["signal"]]
+        else:
+            bb_info = {"signal": None, "bonus": 0}
+
         # 1. 基本面評分 (結合財報 EPS/ROE 與 證交所/櫃買 官方即時 PE/殖利率快照；ETF 採中性評分免扣財報)
         val_info = {}
         try:
@@ -117,8 +125,9 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
 
         fund_score = round(min(100.0, max(0.0, fund_score)), 1)
 
-        # 2. 技術面評分 (含 VCP 加分；若為純 VCP 策略則嚴格門控 BUY)
+        # 2. 技術面評分 (含 VCP / 布林開口起漲加分；若為單一訊號策略則嚴格門控 BUY)
         vcp_sig = vcp_info.get("signal")
+        bb_sig = bb_info.get("signal")
         if params.get("vcp_only_signal"):
             if vcp_sig == "VCP突破":
                 tech_score = max(85, min(100, ts["score"] + vp["bonus"] + vcp_info.get("bonus", 0)))
@@ -126,8 +135,13 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
                 tech_score = min(max(0, params["min_tech_score_for_buy"] - 1), max(65, ts["score"] + vp["bonus"]))
             else:
                 tech_score = min(max(0, params["min_tech_score_for_buy"] - 10), max(0, ts["score"] + vp["bonus"]))
+        elif params.get("bb_only_signal"):
+            if bb_sig == "布林開口起漲":
+                tech_score = max(85, min(100, ts["score"] + vp["bonus"] + bb_info.get("bonus", 0)))
+            else:
+                tech_score = min(max(0, params["min_tech_score_for_buy"] - 10), max(0, ts["score"] + vp["bonus"]))
         else:
-            tech_score = max(0, min(100, ts["score"] + vp["bonus"] + vcp_info.get("bonus", 0)))
+            tech_score = max(0, min(100, ts["score"] + vp["bonus"] + vcp_info.get("bonus", 0) + bb_info.get("bonus", 0)))
 
         # 3. 回測評分（貝氏平滑：以 10 筆 50% 基準平滑極端值）
         samples = bt.get("samples", 0)
@@ -221,10 +235,17 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
         target_price = round(entry * (1 + params["target_return"]), 2)
         rr = round(params["target_return"] / params["stop_loss"], 2)
         position_pct = min(2.0 / (params["stop_loss"] * 100) * 100, 20.0)
-        entry_rule = (
-            f"明日以開盤價進場，停損 -{params['stop_loss']*100:.0f}% / "
-            f"停利 +{params['target_return']*100:.0f}%（下方參考價為今日收盤）"
-        )
+        exit_mode = params.get("exit_mode", "fixed")
+        if exit_mode == "ma20_3d":
+            entry_rule = (
+                f"明日開盤進場，硬停損 -{params['stop_loss']*100:.0f}% / "
+                f"跌破 20MA 連 3 日站不回出場（下方參考價為今日收盤）"
+            )
+        else:
+            entry_rule = (
+                f"明日以開盤價進場，停損 -{params['stop_loss']*100:.0f}% / "
+                f"停利 +{params['target_return']*100:.0f}%（下方參考價為今日收盤）"
+            )
 
         if bt.get("samples", 0) < 8:
             result["risk_notes"].append(f"回測樣本僅 {bt.get('samples', 0)} 次，統計弱")
@@ -268,6 +289,8 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
                 "volume_bonus": vp["bonus"],
                 "volume_verdict": volume_verdict(vp["patterns"]),
                 "vcp": vcp_info,
+                "bb_trend": bb_info,
+                "exit_mode": exit_mode,
                 "valuation": {
                     "pe": pe_val,
                     "yield": yield_val,
@@ -288,6 +311,7 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
             "risk_reward_ratio": rr,
             "position_size_pct": round(position_pct, 1),
             "entry_rule": entry_rule,
+            "exit_mode": exit_mode,
         })
         return result
 

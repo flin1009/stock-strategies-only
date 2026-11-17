@@ -54,6 +54,9 @@ _PARAM_DEFAULTS: dict = {
     "use_volume_patterns": True,
     "use_vcp_breakout": True,
     "vcp_only_signal": False,
+    "use_bb_trend": True,
+    "bb_only_signal": False,
+    "exit_mode": "fixed",
     # 大盤濾鏡
     "market_filter_enabled": True,
     "market_filter_ma_period": 20,
@@ -135,6 +138,8 @@ def validate_strategy(data: dict) -> dict:
                 v = int(v)
             elif isinstance(default_val, float):
                 v = float(v)
+            elif isinstance(default_val, str):
+                v = str(v).strip() or default_val
             clean_params[key] = v
         else:
             clean_params[key] = default_val

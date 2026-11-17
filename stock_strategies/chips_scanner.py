@@ -20,6 +20,7 @@ from .exchange_data import (
 from .data import get_price_history
 from .datasources import get_index_history
 from .vcp import detect_vcp
+from .bb_trend import detect_bb_trend
 
 
 class ChipsScanResult(dict):
@@ -160,6 +161,21 @@ def enrich_candidate_price(
         except Exception:
             pass
 
+    bb_signal = None
+    bb_detail = ""
+    if check_vcp and not price_df.empty and len(price_df) >= 40:
+        try:
+            bb_res = detect_bb_trend(price_df)
+            bb_signal = bb_res.get("signal")
+            bb_detail = bb_res.get("detail", "")
+            if bb_signal:
+                tags = list(candidate.get("tags") or [])
+                if bb_signal not in tags:
+                    tags.append(bb_signal)
+                candidate["tags"] = tags
+        except Exception:
+            pass
+
     candidate.update({
         "today_close": today_close,
         "today_pct": today_pct,
@@ -170,6 +186,8 @@ def enrich_candidate_price(
         "vcp_signal": vcp_signal,
         "vcp_detail": vcp_detail,
         "vcp_pivot": vcp_pivot,
+        "bb_signal": bb_signal,
+        "bb_detail": bb_detail,
         "recent_daily_pcts": recent_daily_pcts,
     })
     return candidate

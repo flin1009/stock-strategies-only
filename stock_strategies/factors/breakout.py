@@ -97,3 +97,16 @@ def vcp_breakout(ctx, params):
     if res["trend_ok"]:
         return 0.55
     return 0.35
+
+
+@register("breakout.bb_trend", "breakout", ["price_df"],
+          "布林開口起漲（MACD剛翻正 + 窄帶寬雙向開口 + 站上揚20日線）", lookback_min=40)
+def bb_trend_breakout(ctx, params):
+    from ..bb_trend import detect_bb_trend
+    min_turnover = float(params.get("bb_min_turnover", 30_000_000.0))
+    res = detect_bb_trend(ctx.price_df, min_turnover=min_turnover)
+    if res["signal"] == "布林開口起漲":
+        return 1.0
+    if res["osc"] is not None and res["osc"] > 0 and res["bw"] is not None and res["bw"] <= 15.0:
+        return 0.65
+    return 0.45

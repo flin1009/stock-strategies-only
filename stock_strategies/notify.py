@@ -232,6 +232,19 @@ def _format_val_badge(c: dict) -> str:
     return f"{pe_str} · {y_str}"
 
 
+def _inline_pattern_badges(tech_signals) -> list[str]:
+    sigs = [str(s) for s in (tech_signals or [])] if not isinstance(tech_signals, str) else [tech_signals]
+    joined = " ".join(sigs)
+    badges: list[str] = []
+    if "VCP突破" in joined:
+        badges.append("🎯VCP突破")
+    elif "VCP蓄勢" in joined:
+        badges.append("🎯VCP蓄勢")
+    if "布林開口起漲" in joined:
+        badges.append("🌊布林開口")
+    return badges
+
+
 def format_messages(
     signals: list[dict],
     watchlist: list[dict] = None,
@@ -280,7 +293,15 @@ def format_messages(
             stop_pct = round((sp / ep - 1) * 100) if ep > 0 and sp > 0 else -8
             tgt_pct = round((tp / ep - 1) * 100) if ep > 0 and tp > 0 else 10
             max_buy_str = f" ≤ {ep * 1.025:.1f} (開高逾+2.5%不追)" if ep > 0 else ""
-            lines.append(f"  🎯 建議進場{max_buy_str} → 損 {s['stop_loss_price']} ({stop_pct:+d}%) / 標 {s['target_price']} ({tgt_pct:+d}%)")
+            exit_mode = s.get("exit_mode") or c.get("exit_mode", "fixed")
+            if exit_mode == "ma20_3d":
+                lines.append(
+                    f"  🎯 建議進場{max_buy_str} → 損 {s['stop_loss_price']} ({stop_pct:+d}%) / 出場: 破月線連3日不回"
+                )
+            else:
+                lines.append(
+                    f"  🎯 建議進場{max_buy_str} → 損 {s['stop_loss_price']} ({stop_pct:+d}%) / 標 {s['target_price']} ({tgt_pct:+d}%)"
+                )
             if s.get("risk_notes"):
                 lines.append(f"  ⚠️ 提醒: {' / '.join(s['risk_notes'])}")
             lines.append("")
@@ -298,9 +319,9 @@ def format_messages(
             ep = float(s.get("entry_price") or 0)
             sp = float(s.get("stop_loss_price") or 0)
             stop_pct = round((sp / ep - 1) * 100) if ep > 0 and sp > 0 else -8
-            vcp_tags = [sig for sig in c.get("tech_signals", []) if "VCP" in sig]
-            vcp_inline = f" | 🎯{'/'.join(vcp_tags)}" if vcp_tags else ""
-            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {val_badge}{vcp_inline}) — 收盤 {s.get('entry_price')}")
+            badges = _inline_pattern_badges(c.get("tech_signals", []))
+            pattern_inline = f" | {' · '.join(badges)}" if badges else ""
+            lines.append(f"• *{s['stock_id']} {s['name']}* (綜合 {s['signal_score']}分 | {val_badge}{pattern_inline}) — 收盤 {s.get('entry_price')}")
             lines.append(f"  ↳ 差在: {_explain_why(s)}")
             lines.append(f"  ↳ 參考防守價: {s['stop_loss_price']} ({stop_pct:+d}%)")
             lines.append("")
@@ -463,13 +484,10 @@ def format_premarket(night: dict | None, signals: list[dict]) -> str:
             dot = "🟢" if act == "BUY" else "🟡"
             score = s.get("signal_score", "")
             score_str = f"({score}分)" if score else ""
-            tech_sigs = str(s.get("tech_signals", ""))
-            vcp_tag = (
-                " · 🎯VCP突破" if "VCP突破" in tech_sigs
-                else (" · 🎯VCP蓄勢" if "VCP蓄勢" in tech_sigs else "")
-            )
+            badges = _inline_pattern_badges(s.get("tech_signals", ""))
+            pattern_tag = (" · " + " · ".join(badges)) if badges else ""
             lines.append(
-                f"{dot} {act} {s.get('stock_id', '')} {s.get('name', '')} {score_str} · {tag}{vcp_tag}"
+                f"{dot} {act} {s.get('stock_id', '')} {s.get('name', '')} {score_str} · {tag}{pattern_tag}"
             )
         if len(watches) > 3:
             rest_strs = [f"{s.get('stock_id', '')}{s.get('name', '')}" for s in watches[3:8]]
@@ -631,29 +649,40 @@ def format_chips_streak(
             lines.extend(cross_items)
             lines.append("")
 
-    # === ⚡ 【法人連買 × VCP 起漲雷達】（全市場 TOP 60 掃描，僅命中時顯示） ===
-    vcp_hits = [
-        r for r in buy_records
-        if r.get("vcp_signal") in ("VCP突破", "VCP蓄勢")
-        or any(t in ("VCP突破", "VCP蓄勢") for t in (r.get("tags") or []))
-    ]
-    if vcp_hits:
-        vcp_hits.sort(
-            key=lambda r: (
-                0 if (r.get("vcp_signal") == "VCP突破" or "VCP突破" in (r.get("tags") or [])) else 1,
-                -r.get("streak_amount", 0.0),
+    # === ⚡ 【法人連買 × 形態起漲雷達】（全市場 TOP 60 掃描，僅命中時顯示） ===
+    pattern_hits = []
+    for r in buy_records:
+        tags = r.get("tags") or []
+        vcp_sig = r.get("vcp_signal") or (
+            "VCP突破" if "VCP突破" in tags else ("VCP蓄勢" if "VCP蓄勢" in tags else None)
+        )
+        bb_sig = r.get("bb_signal") or ("布林開口起漲" if "布林開口起漲" in tags else None)
+        if vcp_sig or bb_sig:
+            pattern_hits.append((r, vcp_sig, bb_sig))
+
+    if pattern_hits:
+        pattern_hits.sort(
+            key=lambda item: (
+                0 if item[1] == "VCP突破" else (1 if item[1] == "VCP蓄勢" else 2),
+                0 if item[2] else 1,
+                -item[0].get("streak_amount", 0.0),
             )
         )
-        lines.append(f"⚡ *【法人連買 × VCP 起漲雷達】* ({len(vcp_hits)} 檔)")
-        for r in vcp_hits[:8]:
-            sig_label = r.get("vcp_signal") or (
-                "VCP突破" if "VCP突破" in (r.get("tags") or []) else "VCP蓄勢"
-            )
+        lines.append(f"⚡ *【法人連買 × 形態起漲雷達】* ({len(pattern_hits)} 檔)")
+        for r, vcp_sig, bb_sig in pattern_hits[:8]:
+            labels = []
+            if vcp_sig:
+                labels.append(vcp_sig)
+            if bb_sig:
+                labels.append("布林開口")
+            icon = "🎯" if vcp_sig else "🌊"
+            sig_label = "+".join(labels)
             amt = r.get("streak_amount", 0.0)
             amt_str = f" +{amt:.1f}億" if amt > 0 else ""
-            detail_str = f" — {r['vcp_detail']}" if r.get("vcp_detail") else ""
+            detail_val = r.get("vcp_detail") or r.get("bb_detail") or ""
+            detail_str = f" — {detail_val}" if detail_val else ""
             lines.append(
-                f"• 🎯 *{r['stock_id']} {r['name']}* ({sig_label} | 連買 {r.get('main_streak', 0)} 天{amt_str}){detail_str}"
+                f"• {icon} *{r['stock_id']} {r['name']}* ({sig_label} | 連買 {r.get('main_streak', 0)} 天{amt_str}){detail_str}"
             )
         lines.append("")
 

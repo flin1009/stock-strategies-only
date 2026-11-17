@@ -259,11 +259,11 @@ def test_chips_scanner_enrich_vcp_and_format(monkeypatch):
     assert enriched["vcp_pivot"] == 115.0
 
     msg = format_chips_streak({"buy_records": [enriched], "sell_records": []})
-    assert "⚡ *【法人連買 × VCP 起漲雷達】* (1 檔)" in msg
+    assert "⚡ *【法人連買 × 形態起漲雷達】* (1 檔)" in msg
     assert "🎯 *2330 台積電* (VCP突破 | 連買 4 天" in msg
 
     msg_empty = format_chips_streak({"buy_records": [{"stock_id": "2002", "name": "中鋼", "main_streak": 3, "streak_total_net_lots": 100, "today_close": 20.0, "today_pct": 0.5, "streak_pct": 1.0}], "sell_records": []})
-    assert "VCP 起漲雷達" not in msg_empty
+    assert "形態起漲雷達" not in msg_empty
 
 
 def test_format_premarket_with_vcp_tag():

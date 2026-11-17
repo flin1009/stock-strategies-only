@@ -1,0 +1,41 @@
+{
+  "id": "bb_trend",
+  "name": "布林開口趨勢波段策略 (MACD翻正 + 雙向開口 + 破月線3日出)",
+  "description": "經近 5 年 95 檔台股回測驗證（PF 2.70 / 賺賠比 4.99）：加權收盤 MACD 柱狀體剛翻正 + 昨日窄帶寬(<=15%)今日雙向開口放大 + 站上連3日上揚20MA + 大盤濾鏡。嚴守 -8% 初始硬停損，否則抱單直到跌破 20 日線連 3 日站不回出場。",
+  "source": "default",
+  "created_at": "2026-11-17T00:00:00Z",
+  "updated_at": "2026-11-17T00:00:00Z",
+  "params": {
+    "eps_threshold": 2.0,
+    "roe_threshold": 10.0,
+    "fundamental_pass_required": false,
+
+    "backtest_years": 3,
+    "hold_days": 60,
+    "min_tech_score_for_signal": 70,
+
+    "target_return": 0.25,
+    "stop_loss": 0.08,
+    "exit_mode": "ma20_3d",
+
+    "weight_chips": 0.25,
+    "weight_technical": 0.45,
+    "weight_fundamental": 0.15,
+    "weight_backtest": 0.15,
+    "min_total_score_for_buy": 65,
+    "min_tech_score_for_buy": 80,
+
+    "use_ma_alignment": true,
+    "use_bollinger_bounce": true,
+    "use_kd_golden_cross": false,
+    "use_macd_bullish": true,
+    "use_volume_patterns": true,
+    "use_vcp_breakout": true,
+    "vcp_only_signal": false,
+    "use_bb_trend": true,
+    "bb_only_signal": true,
+
+    "market_filter_enabled": true,
+    "market_filter_ma_period": 20
+  }
+}

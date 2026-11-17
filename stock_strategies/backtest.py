@@ -1,13 +1,24 @@
 import numpy as np
 import pandas as pd
 
+from .bb_trend import bb_trend_indices
 from .config import CONFIG
 from .indicators import tech_score_at
 from .vcp import vcp_breakout_indices
 
 
+def _apply_cooldown(raw_indices: list[int], cooldown: int) -> list[int]:
+    indices: list[int] = []
+    last_i = -999
+    for i in raw_indices:
+        if i - last_i >= cooldown:
+            indices.append(i)
+            last_i = i
+    return indices
+
+
 def backtest(df: pd.DataFrame, params: dict | None = None) -> dict:
-    """對歷史所有技術分達門檻（或 VCP 突破）的日子做持有 N 日結算。
+    """對歷史所有技術分達門檻（或 VCP / 布林開口）的日子做結算。
 
     訊號日為第 i 天收盤產生，實際進場為第 i+1 天開盤（符合可執行性）。
 
@@ -16,7 +27,7 @@ def backtest(df: pd.DataFrame, params: dict | None = None) -> dict:
       - min_tech_score_for_signal
       - target_return / stop_loss
       - use_ma_alignment / use_bollinger_bounce / use_kd_golden_cross / use_macd_bullish
-      - vcp_only_signal / _index_df
+      - vcp_only_signal / bb_only_signal / exit_mode ('fixed' | 'ma20_3d') / _index_df
     沒給就退回到舊 CONFIG。
     """
     if params is None:
@@ -25,24 +36,28 @@ def backtest(df: pd.DataFrame, params: dict | None = None) -> dict:
     min_score = int(params.get("min_tech_score_for_signal", CONFIG["min_tech_score_for_signal"]))
     target = float(params.get("target_return", CONFIG["target_return"]))
     stop = float(params.get("stop_loss", CONFIG["stop_loss"]))
+    exit_mode = str(params.get("exit_mode", "fixed")).strip().lower()
+    end_idx = len(df) - (5 if exit_mode == "ma20_3d" else hold_days + 1)
 
     if params.get("vcp_only_signal"):
         raw_indices = vcp_breakout_indices(
             df,
             start_idx=220,
-            end_idx=len(df) - hold_days - 1,
+            end_idx=end_idx,
             index_df=params.get("_index_df"),
         )
-        # 10 日冷卻期，避免同波連續突破重複計數
-        indices = []
-        last_i = -999
-        for i in raw_indices:
-            if i - last_i >= 10:
-                indices.append(i)
-                last_i = i
+        indices = _apply_cooldown(raw_indices, cooldown=10)
+    elif params.get("bb_only_signal"):
+        raw_indices = bb_trend_indices(
+            df,
+            start_idx=40,
+            end_idx=end_idx,
+            min_turnover=float(params.get("bb_min_turnover", 30_000_000.0)),
+        )
+        indices = _apply_cooldown(raw_indices, cooldown=5)
     else:
         indices = []
-        for i in range(60, len(df) - hold_days - 1):
+        for i in range(60, max(60, end_idx)):
             if tech_score_at(df.iloc[i], params)["score"] >= min_score:
                 indices.append(i)
 
@@ -51,10 +66,43 @@ def backtest(df: pd.DataFrame, params: dict | None = None) -> dict:
 
     wins = losses = 0
     returns = []
+    ma20_arr = (
+        df["ma20"].values
+        if "ma20" in df.columns
+        else pd.to_numeric(df["close"], errors="coerce").rolling(20).mean().values
+    )
     for idx in indices:
         next_day = df.iloc[idx + 1]
         entry = next_day.get("open")
         if entry is None or pd.isna(entry) or entry <= 0:
+            continue
+
+        if exit_mode == "ma20_3d":
+            end_f = min(len(df), idx + 1 + hold_days)
+            if end_f - (idx + 1) < 4:
+                continue
+            r: float | None = None
+            below_streak = 0
+            for k in range(idx + 1, end_f):
+                row = df.iloc[k]
+                if row["low"] <= entry * (1 - stop):
+                    r = -stop
+                    break
+                ma20 = ma20_arr[k]
+                if pd.notna(ma20) and row["close"] < ma20:
+                    below_streak += 1
+                    if below_streak >= 3:
+                        r = (float(row["close"]) - entry) / entry
+                        break
+                else:
+                    below_streak = 0
+            if r is None:
+                r = (float(df.iloc[end_f - 1]["close"]) - entry) / entry
+            returns.append(r)
+            if r > 0:
+                wins += 1
+            else:
+                losses += 1
             continue
 
         future = df.iloc[idx + 2 : idx + 2 + hold_days]

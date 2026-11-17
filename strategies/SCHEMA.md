@@ -31,6 +31,7 @@
 
 - `target_return` (0-1) — 停利百分比
 - `stop_loss` (0-1) — 停損百分比
+- `exit_mode` (`"fixed" | "ma20_3d"`) — 出場模式（`fixed` 固定停利停損；`ma20_3d` 硬停損＋跌破 20MA 連 3 日站不回出場）
 
 ### 評分加權
 
@@ -47,6 +48,8 @@
 - `use_volume_patterns` (bool) — 量價型態加減分
 - `use_vcp_breakout` (bool) — 啟用 VCP 波動收縮突破／蓄勢偵測加分與標籤
 - `vcp_only_signal` (bool) — 嚴格僅以 VCP 突破作為回測與 BUY 觸發條件
+- `use_bb_trend` (bool) — 啟用「布林開口起漲」三條件偵測加分與標籤
+- `bb_only_signal` (bool) — 嚴格僅以「布林開口起漲」作為回測與 BUY 觸發條件
 
 ### 大盤濾鏡
 
