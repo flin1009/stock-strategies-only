@@ -12,8 +12,8 @@
 
 ## 🌙 新功能（已上線）：夜盤盤前快報
 - 因為最近的夜盤台指期跌了三千多點，連帶 6/8 星期一股市也重挫——**夜盤是隔日台股盤勢的領先指標**，這版就把夜盤觀察機制做進來了。
-- 新增一支**早上 08:00 的盤前排程**：讀昨晚整段台指期夜盤，推播「今日開盤方向預判（大漲/小漲/平盤/小跌/大跌）」，並把前一天選出的 BUY/WATCH 疊上「夜盤順風🟢 / 逆風🔴」標籤。
-- 跟原本收盤後 14:30 的選股報告**互補**：晚上選股、隔天早上用夜盤校準方向。詳見 → [🌙 夜盤盤前快報](#-夜盤盤前快報詳解)
+- 新增一支**早上 07:47 的盤前排程**：讀昨晚整段台指期夜盤，推播「今日開盤方向預判（大漲/小漲/平盤/小跌/大跌）」，並把前一天選出的 BUY/WATCH 疊上「夜盤順風🟢 / 逆風🔴」標籤。
+- 跟原本盤後 **18:19** 的選股報告**互補**：傍晚收盤籌碼齊全後選股、隔天早上用夜盤校準方向。詳見 → [🌙 夜盤盤前快報](#-夜盤盤前快報詳解)
 - 這支程式還在星期天開盤前推薦過一支即使大盤被狂殺、依舊漲停的股票，也推薦了星期一可以「便宜加碼」的標的，還不錯～
 ---
 
@@ -40,7 +40,7 @@
    - `GOOGLE_CREDS_JSON`
 2. 到 **Actions** → **Telegram Smoke Test** → **Run workflow**。
 3. Telegram 收到測試訊息後，再跑 **V3 Daily Signal**。
-4. 測試成功後，每個交易日台灣時間 **14:30** 自動選股推播；**08:00** 會推夜盤盤前快報。
+4. 測試成功後，每個交易日台灣時間 **18:19** 自動選股推播、**21:43** 推三大法人連買/連賣晚報；**07:47** 會推夜盤盤前快報。
 
 如果 Telegram 沒收到，先看 [Step 7：GitHub Actions 自動排程](#step-7github-actions-自動排程) 的錯誤對照表。注意：這五個值都要放在 **Secrets**，不是 Variables。
 
@@ -164,13 +164,13 @@ print('composite =', round(compute_all_factors(ctx, fl, {})['composite'], 3))
 
 夜盤訊號接在**兩個地方**，定位不同：
 
-| | 14:30 收盤後選股（`main.py`） | 🌙 08:00 盤前快報（`premarket.py`） |
+| | 18:19 盤後選股（`main.py`） | 🌙 07:47 盤前快報（`premarket.py`） |
 |---|---|---|
 | 夜盤角色 | **情緒風控濾鏡** | **開盤方向預測** |
 | 用哪段夜盤 | 昨晚（已反映在今收）→ 風控 | 昨晚（隔日就要開盤）→ 預測 |
 | 怎麼作用 | 昨晚夜盤**大跌** → BUY 自動降 WATCH；小跌標逆風；報告標頭顯示夜盤濾鏡狀態 | 推「今日開盤方向預判」+ 把昨日 BUY/WATCH 貼順風/逆風 |
 
-> **為什麼分兩處？** `main.py` 14:30 跑時，今晚夜盤還沒開始，只能拿到「昨晚」那段——它已反映在今天收盤價，所以在 main 裡定位是**風控**（夜盤重挫 → 隔日選股轉保守），而非精準開盤預測。真正「夜盤預測今日開盤」的角色，由隔天早上 08:00、夜盤收完後跑的盤前快報負責。兩者都**不重跑個股選股**，各只多打 1 次台指期 API，省 FinMind 額度。
+> **為什麼分兩處？** `main.py` 18:19 跑時，今晚夜盤開沒多久，主要用「昨晚完整收完」那段（已反映在今天收盤價），因此在 main 裡定位是**風控**（夜盤重挫 → 隔日選股轉保守），而非精準開盤預測。真正「夜盤預測今日開盤」的角色，由隔天早上 07:47、夜盤 05:00 收完後跑的盤前快報負責。兩者都**不重跑個股選股**，各只多打 1 次台指期 API，省 FinMind 額度。
 >
 > 註：夜盤是**大盤級**訊號，對 watchlist 每檔影響相同，若直接加進個股分數只會整體平移、不改變排名，因此設計成**門檻/濾鏡**（比照加權月線濾鏡）而非個股加分。
 
@@ -212,7 +212,7 @@ print('composite =', round(compute_all_factors(ctx, fl, {})['composite'], 3))
 uv run python premarket.py
 ```
 
-排程已內建在 `.github/workflows/premarket.yml`。設定好 GitHub Actions secrets 後，到 **Actions** → **Premarket Night Session** → **Run workflow** 手動測一次；成功後，每個交易日**台灣時間 08:00**（夜盤 05:00 收完、開盤 09:00 前）自動推播。週一會自動抓到上週五的夜盤；若 08:00 夜盤資料還沒更新，會取最近一筆並標明資料日期。
+排程已內建在 `.github/workflows/premarket.yml`。設定好 GitHub Actions secrets 後，到 **Actions** → **Premarket Night Session** → **Run workflow** 手動測一次；成功後，每個交易日**台灣時間 07:47**（夜盤 05:00 收完、開盤 09:00 前）自動推播。週一會自動抓到上週五的夜盤；若 07:47 夜盤資料還沒更新，會取最近一筆並標明資料日期。
 
 > 微調門檻：改 `stock_strategies/config.py` 的 `night_gap_big`（大漲/大跌界線，預設 1.5%）與 `night_gap_small`（平盤界線，預設 0.5%）。
 
@@ -383,12 +383,13 @@ uv run python main.py
 | Workflow | 用途 | 觸發 |
 |---|---|---|
 | `Telegram Smoke Test` | 只測 Telegram token / chat id 是否正確 | 手動 |
-| `V3 Daily Signal` | 收盤後跑 `main.py` 選股並推 Telegram | 每交易日台灣時間 14:30 / 手動 |
-| `Premarket Night Session` | 盤前跑 `premarket.py` 夜盤快報 | 每交易日台灣時間 08:00 / 手動 |
+| `V3 Daily Signal` | 收盤籌碼齊全後跑 `main.py` 選股並推 Telegram | 每交易日台灣時間 18:19 / 手動 |
+| `Chips Streak Evening Scan` | 融資融券與法人完整結算後跑 `chips_streak.py` 全市場連買/賣掃描 | 每交易日台灣時間 21:43 / 手動 |
+| `Premarket Night Session` | 盤前跑 `premarket.py` 夜盤快報 | 每交易日台灣時間 07:47 / 手動 |
 
 先到 **Actions** → **Telegram Smoke Test** → **Run workflow**。如果 Telegram 收得到測試訊息，代表 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` 正確。
 
-接著到 **Actions** → **V3 Daily Signal** → **Run workflow** 手動跑一次完整選股。沒問題後，每個交易日**台灣時間 14:30**會自動執行。需要夜盤快報的話，再手動測一次 **Premarket Night Session**；它會在每個交易日**台灣時間 08:00**自動執行。
+接著到 **Actions** → **V3 Daily Signal** → **Run workflow** 手動跑一次完整選股。沒問題後，每個交易日**台灣時間 18:19** 會自動執行（避開整點尖峰並確保日 K、本益比與三大法人齊全）；**21:43** 會自動執行 **Chips Streak Evening Scan**（確保融資融券結算完成）。需要夜盤快報的話，再手動測一次 **Premarket Night Session**；它會在每個交易日**台灣時間 07:47** 自動執行。
 
 > 如果看不到 workflow，確認檔案在 default branch 的 `.github/workflows/` 目錄下，並到 repo 的 **Actions** 分頁啟用 GitHub Actions。
 
@@ -528,7 +529,7 @@ signal_score = round(
 ## 📐 系統架構
 
 ```
-【收盤後 14:30 — main.py 選股】
+【盤後 18:19 — main.py 選股】
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
 │ Google Sheet │────▶│  Python 腳本  │────▶│  Telegram   │
 │  (Watchlist) │     │              │     │  (通知推播)  │
@@ -539,7 +540,7 @@ signal_score = round(
 │ (財報 + K線) │     │  5. 發通知     │     │  (Signals)  │
 └─────────────┘     └──────────────┘     └─────────────┘
 
-【盤前 08:00 — premarket.py 夜盤快報】
+【盤前 07:47 — premarket.py 夜盤快報】
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
 │   FinMind   │────▶│  夜盤近月漲跌  │────▶│  Telegram   │
 │ (台指期夜盤) │     │  → 開盤方向    │     │ (盤前快報)   │
@@ -549,11 +550,11 @@ signal_score = round(
 │  (Signals)  │     └──────────────┘
 └─────────────┘
 
-         ┌──────────────────────────┐
-         │       GitHub Actions      │
-         │  14:30 選股 / 08:00 夜盤   │
-         │       每交易日自動觸發      │
-         └──────────────────────────┘
+         ┌─────────────────────────────┐
+         │       GitHub Actions         │
+         │ 18:19 選股 / 21:43 籌碼 / 07:47 夜盤 │
+         │       每交易日自動觸發         │
+         └─────────────────────────────┘
 ```
 
 ---
@@ -562,8 +563,9 @@ signal_score = round(
 
 ```
 stock-strategies-only/
-├── main.py                    # 入口①：收盤後 14:30 選股（串接整個流程）
-├── premarket.py               # 入口②：盤前 08:00 夜盤快報
+├── main.py                    # 入口①：盤後 18:19 選股（串接整個流程）
+├── premarket.py               # 入口②：盤前 07:47 夜盤快報
+├── chips_streak.py            # 入口③：盤後 21:43 三大法人連買/賣與融資掃描
 ├── stock_strategies/
 │   ├── config.py              # 策略參數 & 常數（含夜盤門檻）
 │   ├── sheet.py               # Google Sheet 讀寫
@@ -577,8 +579,9 @@ stock-strategies-only/
 ├── pyproject.toml             # Python 依賴管理（uv）
 ├── uv.lock                    # 鎖定版本
 ├── .github/workflows/
-│   ├── daily.yml              # GitHub Actions：收盤後選股（14:30）
-│   ├── premarket.yml          # GitHub Actions：盤前夜盤快報（08:00）
+│   ├── daily.yml              # GitHub Actions：盤後選股（18:19）
+│   ├── chips-streak.yml       # GitHub Actions：全市場籌碼晚報（21:43）
+│   ├── premarket.yml          # GitHub Actions：盤前夜盤快報（07:47）
 │   └── telegram-smoke-test.yml # 手動測 Telegram secret 是否正確
 ├── daily.yml                  # workflow 範本：收盤後選股
 ├── premarket.yml              # workflow 範本：盤前夜盤快報
@@ -672,7 +675,7 @@ Private repo 每月免費 2000 分鐘，這個 workflow 每次約 2 分鐘，每
 
 **✅ 最新完成**
 
-- [x] 🌙 **夜盤盤前快報** — 早上 08:00 讀台指期夜盤，預判今日開盤方向，疊加昨日訊號順風/逆風
+- [x] 🌙 **夜盤盤前快報** — 早上 07:47 讀台指期夜盤，預判今日開盤方向，疊加昨日訊號順風/逆風
 
 **🚧 進行中（下一個大版本）**
 

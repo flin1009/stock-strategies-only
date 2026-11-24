@@ -2,8 +2,8 @@ name: Premarket Night Session
 
 on:
   schedule:
-    # 台灣時間 07:07 = UTC 23:07（週日至週四 UTC，對應台灣時間週一至週五開盤前，避開整點尖峰）
-    - cron: '7 23 * * 0-4'
+    # 台灣時間 07:47 = UTC 23:47（週日至週四 UTC，對應台灣時間週一至週五開盤前；避開 00:00 UTC 整點尖峰並採冷門質數分鐘）
+    - cron: '47 23 * * 0-4'
   workflow_dispatch:  # 允許手動觸發測試
 
 jobs:

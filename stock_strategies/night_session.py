@@ -4,7 +4,7 @@
 漲跌幅，作為「今日開盤方向」的領先預判。
 
 夜盤交易時段為 15:00 ~ 隔日 05:00，FinMind 以「結束日」標記該段 session，
-因此早上 08:00 排程跑時可抓到最近一筆完整夜盤（週一會自動抓到上週五夜盤）。
+因此早上 07:47 排程跑時可抓到最近一筆完整夜盤（週一會自動抓到上週五夜盤）。
 """
 
 import os
@@ -79,7 +79,7 @@ def bias_guidance(bias: str) -> str:
 
 
 def night_filter_note(night: dict | None) -> str:
-    """產生 14:30 選股報告用的「夜盤濾鏡」說明行。"""
+    """產生 18:19 選股報告用的「夜盤濾鏡」說明行。"""
     if not night:
         return "⚠️ 夜盤資料取得失敗，未套用夜盤濾鏡"
     big = CONFIG.get("night_gap_big", 1.5)
@@ -100,9 +100,9 @@ def night_filter_note(night: dict | None) -> str:
 def apply_night_filter(results: list[dict], night: dict | None) -> int:
     """夜盤情緒風控濾鏡（套用在 main.py 的選股結果上）。
 
-    定位：14:30 拿到的是「昨晚」夜盤，已反映在今日收盤，因此這是
+    定位：18:19 拿到的是「昨晚」夜盤，已反映在今日收盤，因此這是
     風險管理用的情緒濾鏡（夜盤重挫 → 隔日選股轉保守），非精準開盤預測。
-    精準的「夜盤預測今日開盤」由早上 08:00 的 premarket.py 負責。
+    精準的「夜盤預測今日開盤」由早上 07:47 的 premarket.py 負責。
 
     規則：
         - 昨晚夜盤大跌（≤ -night_gap_big）→ BUY 降為 WATCH + 風險註記

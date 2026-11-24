@@ -2,8 +2,8 @@ name: V3 Daily Signal
 
 on:
   schedule:
-    # 台灣時間 16:38 = UTC 08:38 (三大法人籌碼發布後完整結算，微調避開半點尖峰)
-    - cron: '38 8 * * 1-5'
+    # 台灣時間 18:19 = UTC 10:19 (待 FinMind 日K 17:30 與 TWSE/TPEx 法人及 PE 18:00 前發布齊全，採冷門質數分鐘)
+    - cron: '19 10 * * 1-5'
   workflow_dispatch:  # 允許手動觸發測試
 
 jobs:

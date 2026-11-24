@@ -201,7 +201,7 @@ def test_chips_scanner_enrich_bb_and_notify_rendering(monkeypatch):
     assert "布林開口起漲" in enriched["tags"]
     assert "MACD翻正" in enriched["bb_detail"]
 
-    # 20:08 籌碼雷達統一區塊呈現 🌊 布林開口
+    # 21:43 籌碼雷達統一區塊呈現 🌊 布林開口
     msg_chips = format_chips_streak({
         "buy_records": [enriched],
         "sell_records": [],
@@ -209,7 +209,7 @@ def test_chips_scanner_enrich_bb_and_notify_rendering(monkeypatch):
     assert "⚡ *【法人連買 × 形態起漲雷達】* (1 檔)" in msg_chips
     assert "🌊 *2317 鴻海* (布林開口 | 連買 4 天" in msg_chips
 
-    # 16:38 BUY(ma20_3d) 與 WATCH(🌊布林開口) + 07:07 早盤 inline 標示
+    # 18:19 BUY(ma20_3d) 與 WATCH(🌊布林開口) + 07:47 早盤 inline 標示
     signals = [
         {
             "stock_id": "2317",
