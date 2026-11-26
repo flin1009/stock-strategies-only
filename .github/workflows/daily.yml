@@ -6,6 +6,9 @@ on:
     - cron: '19 10 * * 1-5'
   workflow_dispatch:  # 允許手動觸發測試
 
+env:
+  TZ: Asia/Taipei
+
 jobs:
   run-signal:
     runs-on: ubuntu-latest

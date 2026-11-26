@@ -6,6 +6,9 @@ on:
     - cron: '47 23 * * 0-4'
   workflow_dispatch:  # 允許手動觸發測試
 
+env:
+  TZ: Asia/Taipei
+
 jobs:
   run-premarket:
     runs-on: ubuntu-latest

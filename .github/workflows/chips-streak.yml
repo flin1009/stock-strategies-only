@@ -6,6 +6,9 @@ on:
     - cron: '43 13 * * 1-5'
   workflow_dispatch:  # 允許手動觸發測試
 
+env:
+  TZ: Asia/Taipei
+
 jobs:
   run-chips-streak:
     runs-on: ubuntu-latest
